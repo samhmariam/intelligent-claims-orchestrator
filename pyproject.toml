@@ -1,0 +1,11 @@
+[project]
+name = "intelligent-claims-orchestrator"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "boto3>=1.42.30",
+    "pillow>=12.1.0",
+    "reportlab>=4.4.9",
+]
