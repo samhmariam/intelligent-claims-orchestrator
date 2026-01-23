@@ -1,32 +1,48 @@
 # Intelligent Claims Processing Agent (ICPA) - Product Requirements Document
 
 ## Table of Contents
-1. [Product Overview](#1-product-overview)
-2. [System Contracts & Canonical Models](#2-system-contracts--canonical-models-required)
+- [Intelligent Claims Processing Agent (ICPA) - Product Requirements Document](#intelligent-claims-processing-agent-icpa---product-requirements-document)
+  - [Table of Contents](#table-of-contents)
+  - [1. Product Overview](#1-product-overview)
+  - [2. System Contracts \& Canonical Models (REQUIRED)](#2-system-contracts--canonical-models-required)
     - [2.1. Canonical Data Schemas](#21-canonical-data-schemas)
     - [2.2. Persistence Model](#22-persistence-model)
-3. [Target Goals & Success Metrics](#3-target-goals--success-metrics)
-4. [Functional Requirements & Phased Implementation](#4-functional-requirements--phased-implementation)
+  - [3. Target Goals \& Success Metrics](#3-target-goals--success-metrics)
+  - [4. Functional Requirements \& Phased Implementation](#4-functional-requirements--phased-implementation)
     - [4.0. Testing Strategy](#40-testing-strategy)
-    - [4.1. Phase 1: Infrastructure & Secure Environment](#41-phase-1-infrastructure--secure-environment)
-    - [4.2. Phase 2: Multimodal Ingestion & Data Sanitation](#42-phase-2-multimodal-ingestion--data-sanitation)
-    - [4.3. Phase 3: Agentic Orchestration](#43-phase-3-agentic-orchestration-the-brain)
-    - [4.4. Phase 4: Safety, Governance & HITL](#44-phase-4-safety-governance--hitl)
-    - [4.5. Phase 5: Optimization & Cost Control](#45-phase-5-optimization--cost-control)
-    - [4.6. Phase 6: Observability, Evaluation & Logs](#46-phase-6-observability-evaluation--logs)
-5. [Operational, Security & Compliance Requirements](#5-operational-security--compliance-requirements)
-    - [5.1. Acceptance Criteria & Non-Functional Targets](#51-acceptance-criteria--non-functional-targets)
-    - [5.2. Error Taxonomy & Retry Policy](#52-error-taxonomy--retry-policy)
-    - [5.3. Data Retention & Lifecycle](#53-data-retention--lifecycle)
-    - [5.4. IAM & Access Boundaries](#54-iam--access-boundaries)
-    - [5.5. Model & Prompt Governance](#55-model--prompt-governance)
+      - [4.0.1. Test Pyramid](#401-test-pyramid)
+      - [4.0.2. Test Requirements by Phase](#402-test-requirements-by-phase)
+      - [4.0.3. Load \& Performance Testing](#403-load--performance-testing)
+      - [4.0.4. Chaos Testing](#404-chaos-testing)
+      - [4.0.5. Security \& Compliance Testing](#405-security--compliance-testing)
+      - [4.0.6. Golden Set Management](#406-golden-set-management)
+    - [4.1. Phase 1: Infrastructure \& Secure Environment](#41-phase-1-infrastructure--secure-environment)
+    - [4.2. Phase 2: Multimodal Ingestion \& Data Sanitation](#42-phase-2-multimodal-ingestion--data-sanitation)
+    - [4.3. Phase 3: Agentic Orchestration (The "Brain")](#43-phase-3-agentic-orchestration-the-brain)
+    - [4.4. Phase 4: Safety, Governance \& HITL](#44-phase-4-safety-governance--hitl)
+    - [4.5. Phase 5: Optimization \& Cost Control](#45-phase-5-optimization--cost-control)
+    - [4.6. Phase 6: Observability, Evaluation \& Logs](#46-phase-6-observability-evaluation--logs)
+  - [5. Operational, Security \& Compliance Requirements](#5-operational-security--compliance-requirements)
+    - [5.1. Acceptance Criteria \& Non-Functional Targets](#51-acceptance-criteria--non-functional-targets)
+    - [5.2. Error Taxonomy \& Retry Policy](#52-error-taxonomy--retry-policy)
+    - [5.3. Data Retention \& Lifecycle](#53-data-retention--lifecycle)
+    - [5.4. IAM \& Access Boundaries](#54-iam--access-boundaries)
+    - [5.5. Model \& Prompt Governance](#55-model--prompt-governance)
     - [5.6. Observability Contract](#56-observability-contract)
-    - [5.7. Cost & Sustainability Controls](#57-cost--sustainability-controls)
+      - [5.6.1. Metrics Dashboard Specification](#561-metrics-dashboard-specification)
+      - [5.6.2. Custom CloudWatch Metrics](#562-custom-cloudwatch-metrics)
+      - [5.6.3. X-Ray Tracing Requirements](#563-x-ray-tracing-requirements)
+    - [5.7. Cost \& Sustainability Controls](#57-cost--sustainability-controls)
     - [5.8. DR/HA Expectations](#58-drha-expectations)
     - [5.9. Compliance Mapping](#59-compliance-mapping)
     - [5.10. External API Interface Contracts](#510-external-api-interface-contracts)
-6. [Release Readiness & Gating](#6-release-readiness--gating)
+  - [6. Release Readiness \& Gating](#6-release-readiness--gating)
     - [6.1. Pre-Production Checklist](#61-pre-production-checklist)
+      - [6.1.1. Functional Quality Gates](#611-functional-quality-gates)
+      - [6.1.2. Security \& Compliance Gates](#612-security--compliance-gates)
+      - [6.1.3. Operational Readiness Gates](#613-operational-readiness-gates)
+      - [6.1.4. Documentation Gates](#614-documentation-gates)
+      - [6.1.5. Deployment Checklist](#615-deployment-checklist)
     - [6.2. Release Approval Workflow](#62-release-approval-workflow)
     - [6.3. Post-Deployment Validation](#63-post-deployment-validation)
     - [6.4. Rollback Criteria (Automatic)](#64-rollback-criteria-automatic)
@@ -52,8 +68,8 @@ All agents must adhere to these JSON schemas.
   "claim_id": "UUID (v4)",
   "policy_number": "String (Top-Level/S3 Key)",
   "incident_date": "ISO-8601 Date",
-  "claim_amount": "Decimal (USD)",
-  "policy_state": "Enum [CA, NY, TX, FL, IL]",
+  "claim_amount": "Decimal (GBP)",
+  "policy_state": "Enum [London, Birmingham, Leeds, Glasgow, Sheffield, Bristol, Edinburgh, Manchester, Cardiff, Newcastle]",
   "description": "String (Sanitized)",
   "documents": ["List<ClaimDocument>"],
   "status": "Enum [INTAKE, PROCESSING, FLAGGED, APPROVED, DENIED]"
@@ -109,7 +125,7 @@ All agents must adhere to these JSON schemas.
   "cited_evidence": ["List<SourcePointer>"],
   "structured_findings": {
     "fraud_score": "Float",
-    "payout_amount": "Decimal (USD) [Nullable]",
+    "payout_amount": "Decimal (GBP) [Nullable]",
     "denial_reason_code": "String [Nullable]"
   }
 }
@@ -184,7 +200,7 @@ All phases must implement testing according to this distribution:
 
 **Phase 5 (Optimization):**
 - [ ] Model routing logic (complexity classifier correctly assigns LOW/HIGH)
-- [ ] Cost per claim validation (average ≤ $0.45 for 100-claim batch)
+- [ ] Cost per claim validation (average ≤ £0.45 for 100-claim batch)
 - [ ] SSM parameter retrieval (model map retrieved and parsed correctly)
 
 **Phase 6 (Evaluation):**
@@ -324,6 +340,11 @@ All phases must implement testing according to this distribution:
 ### 4.2. Phase 2: Multimodal Ingestion & Data Sanitation
 **Definition of Done:** Pipeline ingests, extracts txt, detects PHI, quarantines PHI content, and validates Schema.
 
+**Event Envelopes (Internal):**
+- `com.icpa.ingestion.received` (S3 intake event)
+- `com.icpa.ingestion.extracted` (extraction completed)
+- `com.icpa.ingestion.failed` (schema or PHI quarantine)
+
 - **Requirement 2.1 (Ingestion Contract):**
     - **Inputs:** PDF (Max 10MB), JPG (Max 5MB), WAV (Audio, Max 2min).
     - **S3 Key Convention:**
@@ -370,6 +391,14 @@ All phases must implement testing according to this distribution:
 
 ### 4.3. Phase 3: Agentic Orchestration (The "Brain")
 **Definition of Done:** Step Function executes valid state transitions using Lambda-wrapped Agents.
+
+**Event Envelopes (Internal):**
+- `com.icpa.orchestration.start` (triggered after successful ingestion/extraction)
+
+**Model Tiering (Sustainability/Cost):**
+- **Classification/low-complexity:** Claude Haiku
+- **Adjudication/high-complexity:** Claude Sonnet
+- **Routing:** Lightweight complexity classifier determines model choice prior to Bedrock invocation.
 
 - **Requirement 3.1 (State Machine ASL):**
   - **Query Language:** State machine uses **JSONPath** (not JSONata). All `.$` selectors are JSONPath.
@@ -554,7 +583,7 @@ All phases must implement testing according to this distribution:
         "policy_number": "POL-123456", 
         "incident_date": "2024-01-01", 
         "claim_amount": 1500.00,
-        "policy_state": "CA",
+        "policy_state": "London",
         "description": "...", 
         "documents": [],
         "status": "INTAKE" 
@@ -676,10 +705,10 @@ All phases must implement testing according to this distribution:
 
 4. **Daily Cost by Service (Stacked Bar Chart)**
    - **Metrics:**
-     - `CostByService` (USD, sum)
+     - `CostByService` (GBP, sum)
      - **Dimensions:** `service` [Lambda, Bedrock, Textract, S3, StepFunctions, DynamoDB]
    - **Period:** 1 day
-   - **Goal Line:** $0.45 × daily claim volume (horizontal green line)
+   - **Goal Line:** £0.45 × daily claim volume (horizontal green line)
    - **Data Source:** AWS Cost Explorer API
 
 5. **HITL Queue Depth (Gauge)**
@@ -765,7 +794,7 @@ All phases must implement testing according to this distribution:
   "agent_type": "Enum [FRAUD, ADJUDICATION, ROUTER]",
   "model_id": "String (e.g., anthropic.claude-3-sonnet-v1:0)",
   "decision": "Enum [APPROVE, DENY, HITL, BLOCKED]",
-  "cost_estimate_usd": "Float"
+  "cost_estimate_gbp": "Float"
 }
 ```
 
@@ -820,7 +849,11 @@ All phases must implement testing according to this distribution:
 
 ### 5.9. Compliance Mapping
 - **Applicable frameworks:** HIPAA, GLBA (as applicable by policy).
-- **Controls:** encryption at rest/in transit, access logging, least privilege, retention enforcement.
+- **Controls:**
+  - **Encryption:** S3 SSE-KMS and DynamoDB KMS encryption.
+  - **Network isolation:** VPC endpoints only; no NAT; `kms:ViaService` + `aws:sourceVpce` enforced for key usage.
+  - **Retention (HIPAA/GLBA):** S3 lifecycle policies (Raw 30d, Clean 180d, Quarantine 365d) and DynamoDB TTL enforce data minimization.
+  - **PHI handling (HIPAA):** Comprehend Medical detection with quarantine routing; PHI content isolated before orchestration.
 - **Audit evidence:** S3 access logs, CloudTrail, and evaluation results retained.
 
 ### 5.10. External API Interface Contracts

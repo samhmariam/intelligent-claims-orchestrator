@@ -1,0 +1,15 @@
+{
+  "version": "1.0",
+  "cases": [
+    {"case_id": "GS-001", "expected_decision": "APPROVE", "actual_decision": "APPROVE"},
+    {"case_id": "GS-002", "expected_decision": "DENY", "actual_decision": "DENY"},
+    {"case_id": "GS-003", "expected_decision": "APPROVE", "actual_decision": "APPROVE"},
+    {"case_id": "GS-004", "expected_decision": "HITL", "actual_decision": "HITL"},
+    {"case_id": "GS-005", "expected_decision": "DENY", "actual_decision": "DENY"},
+    {"case_id": "GS-006", "expected_decision": "APPROVE", "actual_decision": "APPROVE"},
+    {"case_id": "GS-007", "expected_decision": "DENY", "actual_decision": "DENY"},
+    {"case_id": "GS-008", "expected_decision": "APPROVE", "actual_decision": "APPROVE"},
+    {"case_id": "GS-009", "expected_decision": "HITL", "actual_decision": "HITL"},
+    {"case_id": "GS-010", "expected_decision": "APPROVE", "actual_decision": "DENY"}
+  ]
+}

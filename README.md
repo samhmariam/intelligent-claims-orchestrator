@@ -138,7 +138,7 @@ python .agents/validate-state.py --phase DESIGN --check-dependencies
 
 ## 💰 Cost Model
 
-### Target: **$0.45 per Claim** (Non-HITL Path)
+### Target: **$0.45 per Claim** (Non-HITL Path, maximum)
 
 | Service | Cost per Claim | Notes |
 |---------|---------------|-------|
@@ -182,6 +182,27 @@ python .agents/validate-state.py --phase DESIGN --check-dependencies
 | `PHIQuarantineRate` | > 10% of claims | Security review |
 
 📈 **[Observability Contract](docs/prd.md#76-observability-contract)**
+📘 **[OpenTelemetry Guide](docs/observability/opentelemetry-guide.md)**
+
+### ADOT Instrumentation (Finalized)
+- ADOT Lambda layer attached to all Lambdas.
+- Structured JSON logs include `trace_id`.
+- Required span annotations: `claim_id`, `agent_type`, `model_id`, `decision`.
+
+---
+
+## 🚢 Deployment (AWS-Only)
+
+### Infrastructure
+- Apply storage lifecycle and TTL policies with [cdk/storage-lifecycle.yaml](cdk/storage-lifecycle.yaml).
+- Apply ADOT defaults with [cdk/lambda-observability.yaml](cdk/lambda-observability.yaml).
+
+### Prompt Governance
+- Seed prompts to SSM using [scripts/seed_prompts.py](scripts/seed_prompts.py).
+- Use `/icpa/prompts/{agent_name}/v{MAJOR}.{MINOR}.{PATCH}` and update `latest` pointer.
+
+### Validation
+- Run gate checks in PRD Section 6 before staging/production.
 
 ---
 

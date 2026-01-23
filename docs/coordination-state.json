@@ -1,15 +1,25 @@
 {
   "run_id": "00000000-0000-0000-0000-000000000001",
   "claim_id": null,
-  "phase": "PLAN",
-  "owner_agent": "PLAN",
+  "phase": "DOCUMENT",
+  "owner_agent": "DOCUMENT",
   "status": "COMPLETED",
   "inputs": {
     "requirements_refs": [
       "docs/prd.md"
     ],
-    "design_refs": [],
-    "code_refs": [],
+    "design_refs": [
+      "docs/design-architecture.md"
+    ],
+    "code_refs": [
+      "src/icpa/ingestion/handlers.py",
+      "src/icpa/orchestration/agent_wrapper.py",
+      "src/icpa/orchestration/router_lambda.py",
+      "src/icpa/orchestration/summarization_lambda.py",
+      "src/icpa/orchestration/notification_lambda.py",
+      "src/icpa/state_machines/claim_orchestration.asl.json",
+      "cdk/storage-lifecycle.yaml"
+    ],
     "test_refs": [],
     "doc_refs": [
       "README.md",
@@ -20,19 +30,39 @@
   "outputs": {
     "artifacts": [
       {
-        "type": "PLAN",
-        "path": "docs/IMPLEMENTATION_SUMMARY.md",
-        "summary": "Completed P0, P1, P2 improvements: README, testing strategy, state validator, release gating, ADR template, FMEA, OpenTelemetry guide, cost dashboard spec"
-      },
-      {
         "type": "DOC",
-        "path": "README.md",
-        "summary": "Comprehensive README with quick start, architecture, security, cost model, observability, and deployment info"
+        "path": "docs/review-report.md",
+        "summary": "Well-Architected review findings and required fixes"
       },
       {
         "type": "DOC",
         "path": "docs/prd.md",
-        "summary": "Enhanced PRD with Section 4.0 (Testing Strategy), Section 7.6.1-7.6.3 (Observability), Section 8 (Release Gating)"
+        "summary": "Updated PRD with event envelopes and compliance mapping"
+      },
+      {
+        "type": "DOC",
+        "path": "README.md",
+        "summary": "Updated deployment and observability references"
+      },
+      {
+        "type": "RUNBOOK",
+        "path": "docs/runbooks/textract-empty-results.md",
+        "summary": "Incident response for Textract empty extraction"
+      },
+      {
+        "type": "RUNBOOK",
+        "path": "docs/runbooks/bedrock-guardrail-block.md",
+        "summary": "Incident response for Bedrock guardrail blocks"
+      },
+      {
+        "type": "RUNBOOK",
+        "path": "docs/runbooks/bedrock-json-parse-failure.md",
+        "summary": "Incident response for non-parseable Bedrock JSON"
+      },
+      {
+        "type": "RUNBOOK",
+        "path": "docs/runbooks/stepfunctions-jsonpath-error.md",
+        "summary": "Incident response for Step Functions JSONPath errors"
       }
     ],
     "decisions": [
@@ -41,6 +71,30 @@
         "rationale": "Focus on high-impact, foundational improvements that enable all future development phases",
         "owner": "Document Agent",
         "timestamp": "2026-01-19T00:00:00Z"
+      },
+      {
+        "title": "Adopt Event-Driven Serverless Architecture",
+        "rationale": "Leverages EventBridge and Step Functions for low-latency, scalable orchestration without NAT gateway overhead.",
+        "owner": "Design Agent",
+        "timestamp": "2026-01-23T13:00:00Z"
+      },
+      {
+        "title": "Model Tiering for Cost and Sustainability",
+        "rationale": "Claude Haiku will handle lightweight classification, while Sonnet manages complex adjudication to balance performance and carbon footprint.",
+        "owner": "Design Agent",
+        "timestamp": "2026-01-23T13:05:00Z"
+      },
+      {
+        "title": "Standardize on OpenTelemetry (ADOT) for Observability",
+        "rationale": "Ensures consistent trace propagation and structured logging across all Lambda functions and Bedrock agents.",
+        "owner": "Design Agent",
+        "timestamp": "2026-01-23T13:10:00Z"
+      },
+      {
+        "title": "Gate deployment on AWS-native security and E2E validation",
+        "rationale": "Release blocked until IAM least-privilege, PHI recall, and E2E workflow tests are executed and recorded.",
+        "owner": "Review Agent",
+        "timestamp": "2026-01-23T16:00:00Z"
       }
     ]
   },
@@ -50,6 +104,12 @@
       "to_phase": "DESIGN",
       "status": "SATISFIED",
       "note": "Requirements documented in enhanced PRD with testing strategy and release gates"
+    },
+    {
+      "from_phase": "REVIEW",
+      "to_phase": "DOCUMENT",
+      "status": "SATISFIED",
+      "note": "Well-Architected review completed with findings recorded"
     }
   ],
   "risks": [
