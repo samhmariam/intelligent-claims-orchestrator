@@ -1,0 +1,71 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "S3Access",
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:CopyObject",
+                "s3:HeadObject",
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                "arn:aws:s3:::*-raw-bucket*",
+                "arn:aws:s3:::*-clean-bucket*",
+                "arn:aws:s3:::*-quarantine-bucket*",
+                "arn:aws:s3:::*-evaluation-bucket*"
+            ]
+        },
+        {
+            "Sid": "TextractAccess",
+            "Effect": "Allow",
+            "Action": [
+                "textract:StartDocumentAnalysis",
+                "textract:GetDocumentAnalysis",
+                "textract:AnalyzeDocument",
+                "textract:DetectDocumentText"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "TranscribeAccess",
+            "Effect": "Allow",
+            "Action": [
+                "transcribe:StartTranscriptionJob",
+                "transcribe:GetTranscriptionJob"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "ComprehendMedicalAccess",
+            "Effect": "Allow",
+            "Action": [
+                "comprehendmedical:DetectPHI"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "EventBridgeAccess",
+            "Effect": "Allow",
+            "Action": [
+                "events:PutEvents"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "ObservabilityAccess",
+            "Effect": "Allow",
+            "Action": [
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+                "xray:PutTraceSegments",
+                "xray:PutTelemetryRecords"
+            ],
+            "Resource": "*"
+        }
+    ]
+}

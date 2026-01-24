@@ -18,8 +18,9 @@ def _read_text(path: pathlib.Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def seed_prompts(region: str, update_latest: bool) -> None:
-    ssm = boto3.client("ssm", region_name=region)
+def seed_prompts(region: str, update_latest: bool, profile: str | None) -> None:
+    session = boto3.Session(profile_name=profile) if profile else boto3.Session()
+    ssm = session.client("ssm", region_name=region)
     repo_root = pathlib.Path(__file__).resolve().parents[1]
 
     for agent, version, relative_path in PROMPTS:
@@ -46,12 +47,13 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Seed ICPA prompts in SSM Parameter Store")
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument("--no-latest", action="store_true")
+    parser.add_argument("--profile", default=None)
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
-    seed_prompts(args.region, update_latest=not args.no_latest)
+    seed_prompts(args.region, update_latest=not args.no_latest, profile=args.profile)
 
 
 if __name__ == "__main__":
