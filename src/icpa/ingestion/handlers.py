@@ -14,6 +14,7 @@ from botocore.client import BaseClient
 from icpa.constants import MIN_TEXT_LENGTH
 from icpa.logging_utils import log_json
 from icpa.otel import annotate_span, start_span
+from icpa.db_client import DatabaseClient
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,7 @@ def ingestion_handler(event: Dict[str, Any], _: Any) -> Dict[str, Any]:
     config = _env()
     clients = _clients()
     s3_client = clients["s3"]
+    db = DatabaseClient(region_name=config.region)
 
     results: List[Dict[str, Any]] = []
 
@@ -174,6 +176,8 @@ def ingestion_handler(event: Dict[str, Any], _: Any) -> Dict[str, Any]:
         claim_id = key.split("/")[0]
         doc_id = str(uuid.uuid4())
         annotate_span({"claim_id": claim_id, "s3_key": key})
+        
+        db.save_claim_state(claim_id, "INTAKE")
 
         with start_span("ingestion_start", {"claim_id": claim_id}):
             head_doc_type, channel = _get_doc_type_and_channel(s3_client, bucket, key)

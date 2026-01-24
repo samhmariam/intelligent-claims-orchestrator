@@ -8,6 +8,7 @@ import boto3
 
 from icpa.logging_utils import log_json
 from icpa.otel import annotate_span, start_span
+from icpa.db_client import DatabaseClient
 
 
 _bedrock_runtime = boto3.client("bedrock-agent-runtime")
@@ -43,6 +44,7 @@ def handler(event: Dict[str, Any], _: Any) -> Dict[str, Any]:
     prompt_version = os.environ.get("PROMPT_VERSION", "latest")
     agent_type = os.environ.get("AGENT_TYPE", agent_name)
     model_id = os.environ.get("MODEL_ID")
+    db = DatabaseClient()
 
     claim_id = event.get("claim_id")
     session_id = event.get("session_id") or claim_id
@@ -71,6 +73,12 @@ def handler(event: Dict[str, Any], _: Any) -> Dict[str, Any]:
             "model_id": model_id,
         },
     ):
+        db.log_audit_entry(
+            claim_id=claim_id,
+            step_id=f"agent_start_{agent_name}",
+            details={"agent_id": agent_id, "input_text_length": len(input_text)}
+        )
+        
         response = _bedrock_runtime.invoke_agent(
             agentId=agent_id,
             agentAliasId=agent_alias_id,
@@ -85,6 +93,16 @@ def handler(event: Dict[str, Any], _: Any) -> Dict[str, Any]:
 
         result = _parse_agent_result(completion_text)
         annotate_span({"decision": result.get("decision")})
+
+        db.log_audit_entry(
+            claim_id=claim_id,
+            step_id=f"agent_end_{agent_name}",
+            details={"decision": result.get("decision")}
+        )
+
+        if "structured_findings" in result:
+             # Assume job_id is just session_id for simplicity, or generate new UUID
+             db.save_evaluation(job_id=session_id, claim_id=claim_id, result=result["structured_findings"])
 
     log_json(
         "bedrock_agent_result",
