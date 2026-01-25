@@ -5,6 +5,13 @@ param (
 
 $ErrorActionPreference = "Stop"
 
+$LambdaExecutionRoleName = "ICPA-Lambda-Execution-Role"
+$RepoRootPath = (Resolve-Path (Join-Path $PSScriptRoot "..\\..")).Path
+$PolicyDir = Join-Path $RepoRootPath "infra\\policies"
+$EventbridgeDir = Join-Path $RepoRootPath "infra\\eventbridge"
+if (-not (Test-Path $PolicyDir)) { New-Item -ItemType Directory -Path $PolicyDir -Force | Out-Null }
+if (-not (Test-Path $EventbridgeDir)) { New-Item -ItemType Directory -Path $EventbridgeDir -Force | Out-Null }
+
 function Assert-Command ($Command) {
     if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
         Write-Error "$Command is not installed or not in the PATH."
@@ -34,6 +41,40 @@ function Get-FileUri ($FileName) {
     return "file://$AbsPath"
 }
 
+function Ensure-LambdaFunction ($FuncName, $Handler, $RoleArn, $ZipPath, $Vars) {
+    $Exists = $false
+    aws lambda get-function --function-name $FuncName --profile $Profile --region $Region --no-cli-pager 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        $Exists = $true
+    }
+
+    if (-not $Exists) {
+        if (-not (Test-Path $ZipPath)) {
+            Write-Error "Lambda package not found at $ZipPath. Run update_code.ps1 first."
+            exit 1
+        }
+        Write-Host "Creating Lambda $FuncName..."
+        aws lambda create-function `
+            --function-name $FuncName `
+            --runtime python3.11 `
+            --handler $Handler `
+            --role $RoleArn `
+            --zip-file "fileb://$ZipPath" `
+            --timeout 30 `
+            --profile $Profile `
+            --region $Region `
+            --no-cli-pager | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to create $FuncName. Ensure the IAM role exists and the zip package is valid."
+            exit 1
+        }
+    }
+
+    if ($Vars -and (Get-Command aws -ErrorAction SilentlyContinue)) {
+        Update-LambdaConfigSafe $FuncName $Vars
+    }
+}
+
 # --- 1. Textract Configuration ---
 Write-Host "`n--- Configuring Textract Dependencies ---"
 
@@ -55,7 +96,7 @@ $TrustPolicy = @{
         }
     )
 } | ConvertTo-Json -Depth 5 -Compress
-$TrustPolicyFile = "textract-trust.json"
+$TrustPolicyFile = Join-Path $PolicyDir "textract-trust.json"
 $TrustPolicy | Out-File -FilePath $TrustPolicyFile -Encoding ascii
 $TrustPolicyUri = Get-FileUri $TrustPolicyFile
 
@@ -131,7 +172,12 @@ Update-LambdaConfig "ICPA-Router-Lambda" $DynamoVars
 # Update Agents
 function Update-LambdaConfigSafe ($FuncName, $NewVars) {
     Write-Host "Updating $FuncName safely..."
-    $Config = aws lambda get-function-configuration --function-name $FuncName --profile $Profile --region $Region --output json --no-cli-pager | ConvertFrom-Json
+    $ConfigJson = aws lambda get-function-configuration --function-name $FuncName --profile $Profile --region $Region --output json --no-cli-pager 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Skipping $FuncName (function not found)."
+        return
+    }
+    $Config = $ConfigJson | ConvertFrom-Json
     $CurrentVars = @{}
     if ($Config.Environment -and $Config.Environment.Variables) {
         $Config.Environment.Variables.PSObject.Properties | ForEach-Object {
@@ -156,6 +202,12 @@ Update-LambdaConfigSafe "ICPA-Fraud-Agent-Lambda" $DynamoVars
 Update-LambdaConfigSafe "ICPA-Adjudication-Agent-Lambda" $DynamoVars
 Update-LambdaConfigSafe "ICPA-Notification-Lambda" $DynamoVars
 
+# Ensure new terminal-state and HITL callback Lambdas exist
+$LambdaExecutionRoleArn = (aws iam get-role --role-name $LambdaExecutionRoleName --profile $Profile --region $Region --output text --query Role.Arn --no-cli-pager)
+$OrchestrationZip = Join-Path $RepoRootPath "dist\\router_lambda.zip"
+Ensure-LambdaFunction "ICPA-Terminal-State-Lambda" "lambda_function.terminal_state_handler" $LambdaExecutionRoleArn $OrchestrationZip $DynamoVars
+Ensure-LambdaFunction "ICPA-HITL-Callback-Lambda" "lambda_function.hitl_callback_handler" $LambdaExecutionRoleArn $OrchestrationZip @{}
+
 # --- 2d. Increase timeouts for agent wrapper Lambdas ---
 Write-Host "`n--- Updating Agent Wrapper Timeouts ---"
 aws lambda update-function-configuration --function-name "ICPA-Fraud-Agent-Lambda" --timeout 60 --profile $Profile --region $Region --no-cli-pager
@@ -163,7 +215,6 @@ aws lambda update-function-configuration --function-name "ICPA-Adjudication-Agen
 
 # --- 2b. IAM Permissions for SSM Prompt/Model Reads ---
 Write-Host "`n--- Ensuring Lambda SSM Read Permissions ---"
-$LambdaExecutionRoleName = "ICPA-Lambda-Execution-Role"
 $SsmPolicy = @{
     Version   = "2012-10-17"
     Statement = @(
@@ -181,7 +232,7 @@ $SsmPolicy = @{
         }
     )
 } | ConvertTo-Json -Depth 5 -Compress
-$SsmPolicyFile = "lambda-ssm-read-policy.json"
+$SsmPolicyFile = Join-Path $PolicyDir "lambda-ssm-read-policy.json"
 $SsmPolicy | Out-File -FilePath $SsmPolicyFile -Encoding ascii
 $SsmPolicyUri = Get-FileUri $SsmPolicyFile
 
@@ -202,7 +253,7 @@ $BedrockPolicy = @{
         }
     )
 } | ConvertTo-Json -Depth 5 -Compress
-$BedrockPolicyFile = "lambda-bedrock-invoke-policy.json"
+$BedrockPolicyFile = Join-Path $PolicyDir "lambda-bedrock-invoke-policy.json"
 $BedrockPolicy | Out-File -FilePath $BedrockPolicyFile -Encoding ascii
 $BedrockPolicyUri = Get-FileUri $BedrockPolicyFile
 
@@ -224,11 +275,32 @@ $SnsPolicy = @{
         }
     )
 } | ConvertTo-Json -Depth 5 -Compress
-$SnsPolicyFile = "lambda-sns-publish-policy.json"
+$SnsPolicyFile = Join-Path $PolicyDir "lambda-sns-publish-policy.json"
 $SnsPolicy | Out-File -FilePath $SnsPolicyFile -Encoding ascii
 $SnsPolicyUri = Get-FileUri $SnsPolicyFile
 
 aws iam put-role-policy --role-name $LambdaExecutionRoleName --policy-name ICPA-Lambda-SNS-Publish --policy-document $SnsPolicyUri --profile $Profile --region $Region --no-cli-pager
+
+# --- 2f. IAM Permissions for Step Functions task callbacks ---
+Write-Host "`n--- Ensuring Lambda Step Functions Callback Permissions ---"
+$SfnPolicy = @{
+    Version   = "2012-10-17"
+    Statement = @(
+        @{
+            Effect   = "Allow"
+            Action   = @(
+                "states:SendTaskSuccess",
+                "states:SendTaskFailure"
+            )
+            Resource = "*"
+        }
+    )
+} | ConvertTo-Json -Depth 5 -Compress
+$SfnPolicyFile = Join-Path $PolicyDir "lambda-sfn-callback-policy.json"
+$SfnPolicy | Out-File -FilePath $SfnPolicyFile -Encoding ascii
+$SfnPolicyUri = Get-FileUri $SfnPolicyFile
+
+aws iam put-role-policy --role-name $LambdaExecutionRoleName --policy-name ICPA-Lambda-StepFunctions-Callback --policy-document $SfnPolicyUri --profile $Profile --region $Region --no-cli-pager
 
 # Quick verification: inline policies + role boundary
 Write-Host "`n--- Verifying Lambda Role Policies ---"
@@ -377,7 +449,7 @@ try {
                     }
                 )
             } | ConvertTo-Json -Depth 5 -Compress
-            $AgentInvokePolicyFile = "bedrock-agent-invoke-model-policy.json"
+            $AgentInvokePolicyFile = Join-Path $PolicyDir "bedrock-agent-invoke-model-policy.json"
             $AgentInvokePolicy | Out-File -FilePath $AgentInvokePolicyFile -Encoding ascii
             $AgentInvokePolicyUri = Get-FileUri $AgentInvokePolicyFile
 
@@ -422,7 +494,7 @@ $EventRoleTrust = @{
         }
     )
 } | ConvertTo-Json -Depth 5 -Compress
-$EventTrustFile = "eventbridge-trust.json"
+$EventTrustFile = Join-Path $PolicyDir "eventbridge-trust.json"
 $EventRoleTrust | Out-File -FilePath $EventTrustFile -Encoding ascii
 $EventTrustUri = Get-FileUri $EventTrustFile
 
@@ -447,7 +519,7 @@ $EventPattern = @{
     source        = @("com.icpa.ingestion")
     "detail-type" = @("com.icpa.orchestration.start")
 } | ConvertTo-Json -Depth 5 -Compress
-$EventPatternFile = "event_pattern.json"
+$EventPatternFile = Join-Path $EventbridgeDir "event_pattern.json"
 $EventPattern | Out-File -FilePath $EventPatternFile -Encoding ascii
 $EventPatternUri = Get-FileUri $EventPatternFile
 
@@ -463,7 +535,7 @@ $TargetObj = @{
     RoleArn = $EventRoleArn
 }
 $TargetsJson = "[$($TargetObj | ConvertTo-Json -Depth 5 -Compress)]"
-$TargetsFile = "targets.json"
+$TargetsFile = Join-Path $EventbridgeDir "targets.json"
 $TargetsJson | Out-File -FilePath $TargetsFile -Encoding ascii
 $TargetsUri = Get-FileUri $TargetsFile
 

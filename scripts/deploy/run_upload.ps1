@@ -4,8 +4,12 @@ param (
 
 $ErrorActionPreference = "Stop"
 
+$RepoRootPath = (Resolve-Path (Join-Path $PSScriptRoot "..\\..")).Path
+
 $RawBucket = "icpa-storage-rawbucket-5pyjjk0wlvsc" 
-$TestDataDir = ".\test-data\claims"
+$TestDataDir = Join-Path $RepoRootPath "test-data\\claims"
+
+Push-Location $RepoRootPath
 
 Write-Host "Checking for test data in $TestDataDir..."
 if (-not (Test-Path $TestDataDir)) {
@@ -51,3 +55,5 @@ if ($ClaimDir) {
 else {
     Write-Error "No claim data found even after generation attempt."
 }
+
+Pop-Location

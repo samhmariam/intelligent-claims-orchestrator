@@ -5,6 +5,8 @@ param (
 
 $ErrorActionPreference = "Stop"
 
+$RepoRootPath = (Resolve-Path (Join-Path $PSScriptRoot "..\\..")).Path
+
 function Assert-Command ($Command) {
     if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
         Write-Error "$Command is not installed or not in the PATH."
@@ -26,9 +28,10 @@ $RouterArn = Get-LambdaArn "ICPA-Router-Lambda"
 $FraudAgentArn = Get-LambdaArn "ICPA-Fraud-Agent-Lambda"
 $AdjudicationAgentArn = Get-LambdaArn "ICPA-Adjudication-Agent-Lambda"
 $NotificationArn = Get-LambdaArn "ICPA-Notification-Lambda"
+$PersistTerminalStateArn = Get-LambdaArn "ICPA-Terminal-State-Lambda"
 
 Write-Host "Reading State Machine Definition..."
-$ASLFile = ".\src\icpa\state_machines\claim_orchestration.asl.json"
+$ASLFile = Join-Path $RepoRootPath "infra\\state-machines\\claim_orchestration.asl.json"
 $ASLContent = Get-Content $ASLFile -Raw
 
 # Substitute Placeholders
@@ -37,8 +40,11 @@ $ASLContent = $ASLContent.Replace('${RouterLambdaArn}', $RouterArn)
 $ASLContent = $ASLContent.Replace('${InvokeFraudAgentLambdaArn}', $FraudAgentArn)
 $ASLContent = $ASLContent.Replace('${InvokeAdjAgentLambdaArn}', $AdjudicationAgentArn)
 $ASLContent = $ASLContent.Replace('${NotificationLambdaArn}', $NotificationArn)
+$ASLContent = $ASLContent.Replace('${PersistTerminalStateLambdaArn}', $PersistTerminalStateArn)
 
-$DefFile = "resolved_state_machine.json"
+$DistDir = Join-Path $RepoRootPath "dist"
+if (-not (Test-Path $DistDir)) { New-Item -ItemType Directory -Path $DistDir | Out-Null }
+$DefFile = Join-Path $DistDir "resolved_state_machine.json"
 $ASLContent | Out-File -FilePath $DefFile -Encoding ascii
 
 Write-Host "Updating State Machine..."

@@ -18,7 +18,7 @@
       "src/icpa/orchestration/summarization_lambda.py",
       "src/icpa/orchestration/notification_lambda.py",
       "src/icpa/state_machines/claim_orchestration.asl.json",
-      "cdk/storage-lifecycle.yaml"
+      "infra/cdk/storage-lifecycle.yaml"
     ],
     "test_refs": [],
     "doc_refs": [

@@ -1,0 +1,1 @@
+{"Statement":[{"Effect":"Allow","Action":["states:SendTaskSuccess","states:SendTaskFailure"],"Resource":"*"}],"Version":"2012-10-17"}

@@ -194,8 +194,8 @@ python .agents/validate-state.py --phase DESIGN --check-dependencies
 ## 🚢 Deployment (AWS-Only)
 
 ### Infrastructure
-- Apply storage lifecycle and TTL policies with [cdk/storage-lifecycle.yaml](cdk/storage-lifecycle.yaml).
-- Apply ADOT defaults with [cdk/lambda-observability.yaml](cdk/lambda-observability.yaml).
+- Apply storage lifecycle and TTL policies with [infra/cdk/storage-lifecycle.yaml](infra/cdk/storage-lifecycle.yaml).
+- Apply ADOT defaults with [infra/cdk/lambda-observability.yaml](infra/cdk/lambda-observability.yaml).
 
 ### Prompt Governance
 - Seed prompts to SSM using [scripts/seed_prompts.py](scripts/seed_prompts.py).
