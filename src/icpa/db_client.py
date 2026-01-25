@@ -1,6 +1,7 @@
 import os
 import boto3
 import time
+from decimal import Decimal
 from typing import Dict, Any, Optional
 from botocore.exceptions import ClientError
 from icpa.logging_utils import log_json
@@ -110,7 +111,7 @@ class DatabaseClient:
         item = {
             "PK": f"EVAL#{job_id}",
             "SK": f"CASE#{claim_id}",
-            "result": result,
+            "result": _to_dynamo_compatible(result),
             "timestamp": int(time.time())
         }
 
@@ -120,3 +121,13 @@ class DatabaseClient:
         except ClientError as e:
             log_json("db_error_save_evaluation", error=str(e), job_id=job_id)
             raise
+
+
+def _to_dynamo_compatible(value: Any) -> Any:
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, dict):
+        return {key: _to_dynamo_compatible(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_to_dynamo_compatible(item) for item in value]
+    return value

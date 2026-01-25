@@ -12,7 +12,7 @@
         "claim_summary_text.$": "$.Payload.summary"
       },
       "ResultPath": "$.claim_summary",
-      "Next": "RouteClaim",
+      "Next": "ParseClaimSummary",
       "Retry": [
         {
           "ErrorEquals": [
@@ -24,15 +24,23 @@
         }
       ]
     },
+    "ParseClaimSummary": {
+      "Type": "Pass",
+      "Parameters": {
+        "parsed.$": "States.StringToJson($.claim_summary.claim_summary_text)"
+      },
+      "ResultPath": "$.claim_summary_parsed",
+      "Next": "RouteClaim"
+    },
     "RouteClaim": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${RouterLambdaArn}",
         "Payload": {
-          "claim_id.$": "$.claim_id",
-          "claim_amount.$": "$.claim_amount",
-          "policy_state.$": "$.policy_state"
+          "claim_id.$": "$.detail.claim_id",
+          "claim_amount.$": "$.claim_summary_parsed.parsed.claim_amount",
+          "policy_state.$": "$.claim_summary_parsed.parsed.policy_state"
         }
       },
       "ResultSelector": {
@@ -59,8 +67,8 @@
       "Parameters": {
         "FunctionName": "${InvokeFraudAgentLambdaArn}",
         "Payload": {
-          "session_id.$": "$.claim_id",
-          "claim_id.$": "$.claim_id",
+          "session_id.$": "$.detail.claim_id",
+          "claim_id.$": "$.detail.claim_id",
           "input_text.$": "$.claim_summary.claim_summary_text"
         }
       },
@@ -100,8 +108,8 @@
       "Parameters": {
         "FunctionName": "${InvokeAdjAgentLambdaArn}",
         "Payload": {
-          "session_id.$": "$.claim_id",
-          "claim_id.$": "$.claim_id",
+          "session_id.$": "$.detail.claim_id",
+          "claim_id.$": "$.detail.claim_id",
           "input_text.$": "$.claim_summary.claim_summary_text"
         }
       },
@@ -152,7 +160,7 @@
         "FunctionName": "${NotificationLambdaArn}",
         "Payload": {
           "taskToken.$": "$$.Task.Token",
-          "claim_id.$": "$.claim_id"
+          "claim_id.$": "$.detail.claim_id"
         }
       },
       "ResultPath": "$.human_decision",

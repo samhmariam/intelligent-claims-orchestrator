@@ -3,6 +3,7 @@ src/data_generator/out/
 src/data_generator/claims/
 src/data_generator/tables/
 src/data_generator/index.jsonl
+test-data/
 
 # Python
 __pycache__/
@@ -30,6 +31,7 @@ coverage.xml
 # AWS
 .aws-sam/
 cdk.out/
+dist/
 
 # Terraform
 .terraform/
@@ -48,3 +50,20 @@ cdk.out/
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# Local AWS artifacts
+bedrock-agent-invoke-model-policy.json
+event_pattern.json
+eventbridge-trust.json
+key_policy.json
+lambda-bedrock-invoke-policy.json
+lambda-sns-publish-policy.json
+lambda-ssm-read-policy.json
+policy_check.json
+policy_v5.json
+policy_v7.json
+resolved_state_machine.json
+targets.json
+textract-trust.json
+versions_check.json
+config_recheck.json
