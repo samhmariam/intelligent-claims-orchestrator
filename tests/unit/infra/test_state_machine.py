@@ -7,7 +7,8 @@ import unittest
 
 class TestStateMachine(unittest.TestCase):
     def setUp(self) -> None:
-        path = pathlib.Path(__file__).resolve().parents[1] / "src" / "icpa" / "state_machines" / "claim_orchestration.asl.json"
+        repo_root = pathlib.Path(__file__).resolve().parents[4]
+        path = repo_root / "infra" / "state-machines" / "claim_orchestration.asl.json"
         self.definition = json.loads(path.read_text(encoding="utf-8"))
 
     def test_required_states_exist(self) -> None:

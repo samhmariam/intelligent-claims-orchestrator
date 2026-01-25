@@ -120,13 +120,12 @@ All payloads **MUST** conform to PRD canonical models (Claim, ClaimDocument, Doc
 { /* AgentResult (Canonical) */ }
 ```
 
-### 2.7 HITL Request (SNS + Task Token)
+### 2.7 HITL Request (SNS)
 ```json
 {
   "event_type": "com.icpa.hitl.request",
   "event_version": "1.0",
   "timestamp": "2026-01-23T00:00:00Z",
-  "task_token": "<sf-token>",
   "claim_id": "<uuid>",
   "reason": "PHI_REVIEW|FRAUD_SCORE|GUARDRAIL_BLOCK",
   "summary": "short text"
@@ -136,8 +135,8 @@ All payloads **MUST** conform to PRD canonical models (Claim, ClaimDocument, Doc
 ### 2.8 HITL Response (Private API Gateway)
 ```json
 {
-  "task_token": "<sf-token>",
-  "decision": "APPROVE|DENY|CONTINUE",
+  "claim_id": "<uuid>",
+  "decision": "APPROVE|DENY|FLAGGED",
   "notes": "string"
 }
 ```

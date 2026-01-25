@@ -22,7 +22,6 @@ def handler(event: Dict[str, Any], _: Any) -> Dict[str, Any]:
 
     with start_span("hitl_notify", {"claim_id": claim_id}):
         payload = {
-            "task_token": task_token,
             "claim_id": claim_id,
         }
         db.save_claim_state(claim_id, "PENDING_REVIEW", {"task_token": task_token})

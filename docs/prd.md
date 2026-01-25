@@ -193,7 +193,7 @@ All phases must implement testing according to this distribution:
 - [ ] Idempotency validation (duplicate requests return cached response)
 
 **Phase 4 (HITL & Safety):**
-- [ ] SNS notification payload structure (taskToken, claim_id present)
+- [ ] SNS notification payload structure (claim_id present)
 - [ ] API Gateway IAM auth (unauthorized requests return 403)
 - [ ] Task token resumption (SendTaskSuccess correctly resumes workflow)
 - [ ] Guardrail blocking (high-risk inputs trigger HITL)
@@ -535,19 +535,18 @@ All phases must implement testing according to this distribution:
         ```json
         {
           "claim_id": "<claim_id>",
-          "taskToken": "<step_functions_task_token>",
           "decision_endpoint": "https://<private-api-id>.execute-api.us-east-1.amazonaws.com/review/approve",
-          "instructions": "Review claim and submit APPROVE or DENY using IAM-authenticated POST to /review/approve with taskToken + decision.",
+          "instructions": "Review claim and submit APPROVE, DENY, or FLAGGED using IAM-authenticated POST to /review/approve with claim_id + decision.",
           "summary_s3_uri": "s3://clean-bucket/<claim_id>/summaries/<claim_id>.txt"
         }
         ```
-    - **Reviewer Action:** Human reviewer assumes the `ClaimsReviewerRole` and uses the internal review script/CLI to submit `POST /review/approve` with body `{ "taskToken": "...", "decision": "APPROVE|DENY" }`.
+    - **Reviewer Action:** Human reviewer assumes the `ClaimsReviewerRole` and uses the internal review script/CLI to submit `POST /review/approve` with body `{ "claim_id": "...", "decision": "APPROVE|DENY|FLAGGED" }`.
     - **Resumption API:**
         - **Endpoint:** API Gateway Private `POST /review/approve`.
         - **Auth:** IAM-Auth.
         - **Handler (`ApprovalHandlerLambda`):**
-            - **Input:** `{ "taskToken": "...", "decision": "APPROVE|DENY" }`.
-            - **Logic:** Calls `SendTaskSuccess` with `{"decision": decision}`.
+            - **Input:** `{ "claim_id": "...", "decision": "APPROVE|DENY|FLAGGED" }`.
+            - **Logic:** Looks up the task token by `claim_id`, then calls `SendTaskSuccess` with `{"decision": decision}`.
 
 - **Requirement 4.2 (Guardrails - Security & RAI):**
     - **Prompt Injection:** Block inputs containing "Ignore previous instructions", "System override", or known jailbreak patterns (High strictness).
@@ -859,7 +858,7 @@ All phases must implement testing according to this distribution:
 ### 5.10. External API Interface Contracts
 - **Inbound:** only Private API Gateway `POST /review/approve` with IAM auth.
 - **Rate limits:** 50 req/min per reviewer role.
-- **Request/Response:** request body `{ "taskToken": "...", "decision": "APPROVE|DENY" }`, response `{ "status": "OK" }`.
+- **Request/Response:** request body `{ "claim_id": "...", "decision": "APPROVE|DENY|FLAGGED" }`, response `{ "status": "OK" }`.
 
 ---
 

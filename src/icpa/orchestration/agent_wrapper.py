@@ -16,6 +16,7 @@ from icpa.db_client import DatabaseClient
 _bedrock_runtime = boto3.client("bedrock-agent-runtime")
 _ssm = boto3.client("ssm")
 
+_ALLOWED_DECISIONS = {"CONTINUE", "STOP", "HITL", "APPROVE", "DENY", "BLOCKED", "FLAGGED"}
 
 def _safe_snippet(text: str, max_len: int = 200) -> str:
     snippet = text[:max_len]
@@ -101,6 +102,30 @@ def _parse_agent_result(text: str) -> Dict[str, Any]:
 
     raise ValueError("Agent output does not contain JSON")
 
+def _validate_agent_result(result: Dict[str, Any]) -> None:
+    decision = result.get("decision")
+    if not isinstance(decision, str):
+        raise ValueError("Agent output missing decision")
+    if decision.upper() not in _ALLOWED_DECISIONS:
+        raise ValueError("Agent output has invalid decision")
+    findings = result.get("structured_findings")
+    if findings is not None and not isinstance(findings, dict):
+        raise ValueError("Agent output structured_findings must be object")
+
+
+def _invoke_agent(agent_id: str, agent_alias_id: str, session_id: str, input_text: str) -> str:
+    response = _bedrock_runtime.invoke_agent(
+        agentId=agent_id,
+        agentAliasId=agent_alias_id,
+        sessionId=session_id,
+        inputText=input_text,
+    )
+    completion_text = ""
+    for event_item in response.get("completion", []):
+        if "chunk" in event_item:
+            completion_text += event_item["chunk"]["bytes"].decode("utf-8")
+    return completion_text
+
 
 def handler(event: Dict[str, Any], _: Any) -> Dict[str, Any]:
     agent_id = os.environ["BEDROCK_AGENT_ID"]
@@ -109,6 +134,7 @@ def handler(event: Dict[str, Any], _: Any) -> Dict[str, Any]:
     prompt_version = os.environ.get("PROMPT_VERSION", "latest")
     agent_type = os.environ.get("AGENT_TYPE", agent_name)
     model_id = os.environ.get("MODEL_ID")
+    parse_retries = int(os.environ.get("AGENT_PARSE_RETRIES", "1"))
     db = DatabaseClient()
 
     claim_id = event.get("claim_id")
@@ -143,31 +169,51 @@ def handler(event: Dict[str, Any], _: Any) -> Dict[str, Any]:
             step_id=f"agent_start_{agent_name}",
             details={"agent_id": agent_id, "input_text_length": len(input_text)}
         )
-        
-        response = _bedrock_runtime.invoke_agent(
-            agentId=agent_id,
-            agentAliasId=agent_alias_id,
-            sessionId=session_id,
-            inputText=input_text,
-        )
 
+        last_error: Exception | None = None
         completion_text = ""
-        for event_item in response.get("completion", []):
-            if "chunk" in event_item:
-                completion_text += event_item["chunk"]["bytes"].decode("utf-8")
-
-        try:
-            result = _parse_agent_result(completion_text)
-            result = _normalize_agent_result(result, agent_type)
-        except ValueError:
+        for attempt in range(parse_retries + 1):
+            completion_text = _invoke_agent(agent_id, agent_alias_id, session_id, input_text)
+            try:
+                result = _parse_agent_result(completion_text)
+                result = _normalize_agent_result(result, agent_type)
+                _validate_agent_result(result)
+                if result.get("decision") and isinstance(result["decision"], str):
+                    result["decision"] = result["decision"].upper()
+                last_error = None
+                break
+            except ValueError as exc:
+                last_error = exc
+                log_json(
+                    "agent_output_parse_failed",
+                    claim_id=claim_id,
+                    agent_type=agent_type,
+                    output_length=len(completion_text),
+                    output_snippet=_safe_snippet(completion_text),
+                    attempt=attempt + 1,
+                )
+                if attempt >= parse_retries:
+                    break
+                log_json(
+                    "agent_output_retry",
+                    claim_id=claim_id,
+                    agent_type=agent_type,
+                    attempt=attempt + 1,
+                )
+        if last_error:
+            fallback: Dict[str, Any]
+            if agent_type and agent_type.upper().startswith("FRAUD"):
+                fallback = {"decision": "CONTINUE", "structured_findings": {"fraud_score": 1.0}}
+            else:
+                fallback = {"decision": "BLOCKED"}
             log_json(
-                "agent_output_parse_failed",
+                "agent_output_fallback_hitl",
                 claim_id=claim_id,
                 agent_type=agent_type,
-                output_length=len(completion_text),
-                output_snippet=_safe_snippet(completion_text),
+                reason=str(last_error),
             )
-            raise
+            result = fallback
+
         annotate_span({"decision": result.get("decision")})
 
         db.log_audit_entry(

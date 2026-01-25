@@ -1,1 +1,1 @@
-{"Statement":[{"Effect":"Allow","Action":["states:SendTaskSuccess","states:SendTaskFailure"],"Resource":"*"}],"Version":"2012-10-17"}
+{"Version":"2012-10-17","Statement":[{"Resource":"*","Effect":"Allow","Action":["states:SendTaskSuccess","states:SendTaskFailure"]}]}

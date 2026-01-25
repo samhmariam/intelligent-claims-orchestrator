@@ -1,7 +1,11 @@
 from aws_cdk import (
+    CfnParameter,
     Duration,
     Stack,
+    aws_apigateway as apigateway,
     aws_cloudwatch as cloudwatch,
+    aws_iam as iam,
+    aws_lambda as lambda_,
 )
 from constructs import Construct
 
@@ -216,5 +220,100 @@ class CdkStack(Stack):
                 sparkline=True,
                 width=8,
                 height=6,
+            ),
+        )
+
+        vpc_endpoint_id = CfnParameter(
+            self,
+            "HITLApiVpcEndpointId",
+            description="VPC endpoint ID allowed to invoke the private HITL API.",
+        )
+
+        hitl_lambda = lambda_.Function.from_function_name(
+            self,
+            "HitlCallbackLambda",
+            "ICPA-HITL-Callback-Lambda",
+        )
+
+        api_policy = iam.PolicyDocument(
+            statements=[
+                iam.PolicyStatement(
+                    actions=["execute-api:Invoke"],
+                    principals=[iam.AnyPrincipal()],
+                    resources=["execute-api:/*/*/*"],
+                    conditions={
+                        "StringEquals": {"aws:SourceVpce": vpc_endpoint_id.value_as_string}
+                    },
+                    effect=iam.Effect.ALLOW,
+                )
+            ]
+        )
+
+        api = apigateway.RestApi(
+            self,
+            "HitlReviewApi",
+            rest_api_name="ICPA-HITL-Review",
+            description="Private HITL review API for claim approvals.",
+            endpoint_configuration=apigateway.EndpointConfiguration(
+                types=[apigateway.EndpointType.PRIVATE]
+            ),
+            policy=api_policy,
+            deploy_options=apigateway.StageOptions(stage_name="prod"),
+        )
+
+        request_model = apigateway.Model(
+            self,
+            "HitlReviewRequestModel",
+            rest_api=api,
+            content_type="application/json",
+            schema=apigateway.JsonSchema(
+                schema=apigateway.JsonSchemaVersion.DRAFT4,
+                title="HitlReviewRequest",
+                type=apigateway.JsonSchemaType.OBJECT,
+                required=["claim_id", "decision"],
+                properties={
+                    "claim_id": apigateway.JsonSchema(type=apigateway.JsonSchemaType.STRING),
+                    "decision": apigateway.JsonSchema(
+                        type=apigateway.JsonSchemaType.STRING,
+                        enum=["APPROVE", "DENY", "FLAGGED"],
+                    ),
+                },
+            ),
+        )
+
+        request_validator = api.add_request_validator(
+            "HitlReviewRequestValidator",
+            validate_request_body=True,
+        )
+
+        api_key = api.add_api_key(
+            "HitlReviewApiKey",
+            api_key_name="ICPA-HITL-Review-Key",
+        )
+        usage_plan = api.add_usage_plan(
+            "HitlReviewUsagePlan",
+            name="ICPA-HITL-Review-Plan",
+            throttle=apigateway.ThrottleSettings(rate_limit=0.83, burst_limit=5),
+        )
+        usage_plan.add_api_key(api_key)
+        usage_plan.add_api_stage(stage=api.deployment_stage)
+
+        review = api.root.add_resource("review")
+        approve = review.add_resource("approve")
+        approve.add_method(
+            "POST",
+            apigateway.LambdaIntegration(hitl_lambda),
+            authorization_type=apigateway.AuthorizationType.IAM,
+            api_key_required=True,
+            request_models={"application/json": request_model},
+            request_validator=request_validator,
+        )
+
+        hitl_lambda.add_permission(
+            "HitlApiInvokePermission",
+            principal=iam.ServicePrincipal("apigateway.amazonaws.com"),
+            action="lambda:InvokeFunction",
+            source_arn=api.arn_for_execute_api(
+                "POST", "/review/approve", api.deployment_stage.stage_name
             ),
         )
