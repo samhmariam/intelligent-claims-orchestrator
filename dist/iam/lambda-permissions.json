@@ -13,10 +13,14 @@
                 "s3:ListBucket"
             ],
             "Resource": [
-                "arn:aws:s3:::*-raw-bucket*",
-                "arn:aws:s3:::*-clean-bucket*",
-                "arn:aws:s3:::*-quarantine-bucket*",
-                "arn:aws:s3:::*-evaluation-bucket*"
+                "arn:aws:s3:::*rawbucket*",
+                "arn:aws:s3:::*rawbucket*/*",
+                "arn:aws:s3:::*cleanbucket*",
+                "arn:aws:s3:::*cleanbucket*/*",
+                "arn:aws:s3:::*quarantinebucket*",
+                "arn:aws:s3:::*quarantinebucket*/*",
+                "arn:aws:s3:::*evaluationbucket*",
+                "arn:aws:s3:::*evaluationbucket*/*"
             ]
         },
         {
@@ -64,6 +68,28 @@
                 "logs:PutLogEvents",
                 "xray:PutTraceSegments",
                 "xray:PutTelemetryRecords"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "DynamoDBAccess",
+            "Effect": "Allow",
+            "Action": [
+                "dynamodb:PutItem",
+                "dynamodb:GetItem",
+                "dynamodb:UpdateItem",
+                "dynamodb:Query",
+                "dynamodb:Scan",
+                "dynamodb:ConditionCheckItem"
+            ],
+            "Resource": "arn:aws:dynamodb:*:*:table/icpa-storage-*"
+        },
+        {
+            "Sid": "KMSAccess",
+            "Effect": "Allow",
+            "Action": [
+                "kms:Decrypt",
+                "kms:GenerateDataKey"
             ],
             "Resource": "*"
         }

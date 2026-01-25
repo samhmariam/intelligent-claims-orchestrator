@@ -35,6 +35,8 @@ DOC_TYPE_ENUM = {
     "POLICE_REPORT",
     "ESTIMATE",
     "AUDIO_STATEMENT",
+    "INVOICE",
+    "ADJUSTER_NOTES",
 }
 
 MIME_TYPE_ENUM = {
@@ -136,6 +138,25 @@ def _emit_failure(events_client: BaseClient, claim_id: str, error_code: str, s3_
                     }
                 ),
             }
+    )
+
+
+def _emit_success(events_client: BaseClient, claim_id: str, extract_uri: str) -> None:
+    events_client.put_events(
+        Entries=[
+            {
+                "Source": "com.icpa.ingestion",
+                "DetailType": "com.icpa.orchestration.start",
+                "Detail": json.dumps(
+                    {
+                        "claim_id": claim_id,
+                        "extract_uri": extract_uri,
+                        # Default values for orchestration readiness. 
+                        # Ideally these populate from a DB lookup or earlier extraction.
+                        "status": "EXTRACTED" 
+                    }
+                ),
+            }
         ]
     )
 
@@ -195,7 +216,8 @@ def ingestion_handler(event: Dict[str, Any], _: Any) -> Dict[str, Any]:
             clean_uri = _copy_to_clean(s3_client, bucket, key, config.clean_bucket, claim_id, doc_id)
 
             if mime_type == "application/pdf":
-                job_tag = f"claim_id={claim_id};doc_id={doc_id};clean_uri={clean_uri}"
+                # JobTag must only contain [a-zA-Z0-9_.-]
+                job_tag = f"cid_{claim_id}_did_{doc_id}"
                 params: Dict[str, Any] = {
                     "DocumentLocation": {"S3Object": {"Bucket": bucket, "Name": key}},
                     "FeatureTypes": ["FORMS", "TABLES"],
@@ -276,7 +298,22 @@ def textract_result_handler(event: Dict[str, Any], _: Any) -> Dict[str, Any]:
 
     job_id = _get_textract_job_id(event)
     job_tag = _get_textract_job_tag(event)
-    claim_id, doc_id, clean_uri = _parse_job_tag(job_tag)
+    claim_id, doc_id = _parse_job_tag(job_tag)
+    
+    # We can't pass clean_uri in JobTag due to char limits, so we infer it or rely on fallback detection on clean bucket content
+    # For now, we set clean_uri to None here, and if needed for fallback, we find it.
+    clean_uri: Optional[str] = None
+    
+    # Try to list objects in clean bucket under this doc_id to find the source file for fallback
+    try:
+        clean_prefix = f"{claim_id}/doc_id={doc_id}/"
+        objs = s3_client.list_objects_v2(Bucket=config.clean_bucket, Prefix=clean_prefix)
+        if "Contents" in objs:
+            # Assume the first key is the source doc (e.g. FNOL.pdf)
+            clean_key = objs["Contents"][0]["Key"]
+            clean_uri = f"s3://{config.clean_bucket}/{clean_key}"
+    except Exception as e:
+        print(f"Warning: Could not infer clean_uri for fallback: {e}")
 
     with start_span("textract_result", {"claim_id": claim_id, "job_id": job_id}):
         blocks: List[Dict[str, Any]] = []
@@ -292,10 +329,6 @@ def textract_result_handler(event: Dict[str, Any], _: Any) -> Dict[str, Any]:
                 break
 
         text, page_count = _extract_text_from_blocks(blocks)
-        if len(text) < MIN_TEXT_LENGTH and clean_uri:
-            fallback = textract_client.detect_document_text(
-                Document={"S3Object": {"Bucket": config.clean_bucket, "Name": _s3_key_from_uri(clean_uri)}}
-            )
             text, page_count = _extract_text_from_blocks(fallback.get("Blocks", []))
 
         extract_uri = _write_extract(s3_client, config.clean_bucket, claim_id, doc_id, text)
@@ -304,6 +337,9 @@ def textract_result_handler(event: Dict[str, Any], _: Any) -> Dict[str, Any]:
             quarantined = _quarantine_object(s3_client, config.quarantine_bucket, extract_uri, "phi-review")
             _emit_failure(clients["events"], claim_id, "PHI_DETECTED", quarantined)
             return {"status": "QUARANTINED", "claim_id": claim_id, "doc_id": doc_id}
+
+        # Emit success event to trigger orchestration
+        _emit_success(clients["events"], claim_id, extract_uri)
 
         return {
             "status": "EXTRACTED",
@@ -340,18 +376,39 @@ def transcribe_postprocess_handler(event: Dict[str, Any], _: Any) -> Dict[str, A
 
 
 def _get_textract_job_id(event: Dict[str, Any]) -> str:
+    # Handle SNS wrapper
+    if "Records" in event and event["Records"][0].get("EventSource") == "aws:sns":
+        try:
+            message = event["Records"][0]["Sns"]["Message"]
+            payload = json.loads(message)
+            return payload.get("JobId", "")
+        except Exception:
+            pass
+            
     detail = event.get("detail", {})
-    return detail.get("JobId") or event.get("JobId") or event.get("jobId")
+    return detail.get("JobId") or event.get("JobId") or event.get("jobId", "")
 
 
 def _get_textract_job_tag(event: Dict[str, Any]) -> str:
+    # Handle SNS wrapper
+    if "Records" in event and event["Records"][0].get("EventSource") == "aws:sns":
+        try:
+            message = event["Records"][0]["Sns"]["Message"]
+            payload = json.loads(message)
+            return payload.get("JobTag", "")
+        except Exception:
+            pass
+            
     detail = event.get("detail", {})
     return detail.get("JobTag") or event.get("JobTag") or event.get("jobTag", "")
 
 
-def _parse_job_tag(job_tag: str) -> Tuple[str, str, str]:
-    parts = dict(item.split("=", 1) for item in job_tag.split(";") if "=" in item)
-    return parts.get("claim_id", ""), parts.get("doc_id", ""), parts.get("clean_uri", "")
+def _parse_job_tag(job_tag: str) -> Tuple[str, str]:
+    # Format: cid_{claim_id}_did_{doc_id}
+    match = re.match(r"cid_([^_]+)_did_([^_]+)", job_tag)
+    if match:
+        return match.group(1), match.group(2)
+    return "", ""
 
 
 def _parse_transcribe_key(key: str) -> Tuple[str, str, str]:
