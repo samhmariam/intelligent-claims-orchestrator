@@ -29,5 +29,6 @@ Draft or update documentation based on recent changes, ensuring accuracy and ali
 
 ## Checklist
 - [ ] Updated affected docs
+- [ ] **Audit Trail:** Updated PRD specs to match new Sort Key (STEP#) requirements for modular phases.
 - [ ] Verified accuracy against code
 - [ ] Noted any open questions

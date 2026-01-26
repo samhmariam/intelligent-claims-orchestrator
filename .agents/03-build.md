@@ -32,6 +32,8 @@ Implement features end-to-end following the approved design, including code, con
 
 ## Checklist
 - [ ] Implemented changes per design
+- [ ] **Redact-and-Proceed:** Implemented logic in `handlers.py` to redact PHI and emit success events.
+- [ ] **S3 Aggregation:** Implemented summation logic in `summarization_lambda.py`.
 - [ ] Updated configuration and wiring
 - [ ] Added or updated tests
 - [ ] Ensured backwards compatibility where required

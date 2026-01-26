@@ -29,6 +29,7 @@ Provide a high-signal code review for correctness, security, performance, and al
 
 ## Checklist
 - [ ] Logic matches requirements
+- [ ] **Tracer Bullet Enforced:** No complex AI logic merged until basic EventBridge-to-StepFunction link is proven.
 - [ ] Error handling and edge cases covered
 - [ ] Security and privacy constraints upheld
 - [ ] Tests updated or added where needed

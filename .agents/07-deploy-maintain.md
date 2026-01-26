@@ -29,6 +29,7 @@ Assist with deployment readiness and operational maintenance: checks, monitoring
 
 ## Checklist
 - [ ] Validated release scope and dependencies
+- [ ] **Incremental Deployment:** Managed IaC deployment order (Buckets -> Tables -> Triggers) to avoid circular dependencies.
 - [ ] Ensured monitoring/alerts cover new behavior
 - [ ] Documented rollback and verification steps
 - [ ] Verified budgets, alarms, and retention policies

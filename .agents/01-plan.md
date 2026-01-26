@@ -8,6 +8,7 @@ Create a first-pass plan for a feature or change by mapping requirements to the 
 
 ## When to Use
 - New feature requests or significant changes.
+- **Phase Transition Planning:** Before moving from Phase $N$ to Phase $N+1$.
 - Ambiguous requirements that need decomposition.
 - Estimation and dependency discovery.
 
@@ -32,9 +33,10 @@ Create a first-pass plan for a feature or change by mapping requirements to the 
 
 ## Checklist
 - [ ] Mapped requirements to existing modules
+- [ ] **Success Gate Defined:** Verified Phase $N$ stability criteria before planning Phase $N+1$.
 - [ ] Identified impacted services and data flows
 - [ ] Listed unknowns and proposed clarifications
 - [ ] Suggested minimal viable milestones
 - [ ] Captured NFR targets and compliance scope
 - [ ] Performed Responsible AI Impact Assessment (Bias, Fairness, Privacy)
-- [ ]  Evaluated Sustainability goals (Model selection, Architecture efficiency)
+- [ ] Evaluated Sustainability goals (Model selection, Architecture efficiency)

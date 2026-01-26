@@ -28,6 +28,7 @@ Create or update tests based on requirements and code changes, and identify cove
 
 ## Checklist
 - [ ] Tests cover primary and edge flows
+- [ ] **Phase Verification:** Executed tests for specific phase gates (e.g., Phase 2 PHI extraction success).
 - [ ] Tests fail when feature is broken
 - [ ] Flaky sources minimized
 - [ ] Security, privacy, and compliance tests included

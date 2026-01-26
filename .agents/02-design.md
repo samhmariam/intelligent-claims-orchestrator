@@ -35,9 +35,9 @@ Translate requirements into a concrete design, including interfaces, data models
 
 ## Checklist
 - [ ] Defined interfaces and schemas
+- [ ] **Schema Design:** Designed specific EventBridge schemas and Step Function I/O for "Redact-and-Proceed".
 - [ ] Identified edge cases and error handling
 - [ ] Confirmed alignment with existing patterns
-- [ ] Listed migration steps if needed
 - [ ] Listed migration steps if needed
 - [ ] Specified IAM boundaries and data-retention lifecycle
 - [ ] Included observability and cost controls
