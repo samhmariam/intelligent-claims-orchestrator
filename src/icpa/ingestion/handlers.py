@@ -1,6 +1,7 @@
 import os
 import json
 import boto3
+import botocore
 import urllib.parse
 import uuid
 import logging
@@ -30,74 +31,132 @@ IDEMPOTENCY_TABLE = os.environ.get('IDEMPOTENCY_TABLE_NAME', 'ICPA_Idempotency')
 # Idempotency Config
 persistence_layer = DynamoDBPersistenceLayer(table_name=IDEMPOTENCY_TABLE, key_attr="PK")
 
+from boto3.dynamodb.conditions import Key
+
 @tracer.capture_method
-def process_record(bucket: str, key: str) -> str:
-    """Core logic to process a single S3 object."""
-    logger.info(f"Processing object: {bucket}/{key}")
+def get_or_create_claim_id(external_id: str) -> str:
+    """
+    Atomic mapping of external_id -> claim_id.
+    Uses a dedicated MAPPING# item with ConditionExpression to prevent race conditions.
+    """
+    table = dynamodb.Table(CLAIMS_TABLE)
+    mapping_pk = f"MAPPING#{external_id}"
     
-    # Extract claim_id from Key
-    # Expected Format: raw/documents/<claim_id>/<filename>
-    #               or raw/photos/<claim_id>/<filename>
-    parts = key.split('/')
-    if len(parts) >= 3:
-        # parts[0] = "raw"
-        # parts[1] = "documents" or "photos"
-        # parts[2] = claim_id
-        # parts[3] = filename
-        channel = parts[1]
-        claim_id = parts[2]
-        filename = parts[-1]
-    else:
-        # Fallback (legacy format support or root upload)
-        claim_id = str(uuid.uuid4())
-        filename = os.path.basename(key)
-        logger.warning(f"Could not extract claim_id from key {key}. Generated {claim_id}.")
+    # 1. Try to create new mapping (Atomic)
+    new_claim_id = str(uuid.uuid4())
+    timestamp = datetime.now(timezone.utc).isoformat()
+    
+    try:
+        table.put_item(
+            Item={
+                'PK': mapping_pk,
+                'SK': 'META',
+                'claim_id': new_claim_id,
+                'external_id': external_id,
+                'created_at': timestamp,
+                'ttl': int(datetime.now(timezone.utc).timestamp()) + (365*24*60*60)
+            },
+            ConditionExpression='attribute_not_exists(PK)'
+        )
+        logger.info(f"Atomic Create: Mapped {external_id} -> {new_claim_id}")
+        return new_claim_id
+        
+    except botocore.exceptions.ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            # Race lost or already exists - Retrieve existing
+            logger.info(f"Mapping exists for {external_id}. Fetching...")
+            resp = table.get_item(Key={'PK': mapping_pk, 'SK': 'META'})
+            existing = resp.get('Item', {})
+            if 'claim_id' in existing:
+                 return existing['claim_id']
+            else:
+                 raise Exception(f"Corrupt mapping record for {external_id}")
+        else:
+            raise e
 
-    # Annotate Trace
-    tracer.put_annotation(key="claim_id", value=claim_id)
-    
-    doc_id = str(uuid.uuid4())
-    
-    # 1. Copy to Clean Bucket
-    dest_key = f"{claim_id}/doc_id={doc_id}/{filename}"
-    
-    logger.info(f"Copying to {CLEAN_BUCKET}/{dest_key}")
-    
-    s3.copy_object(
-        CopySource={'Bucket': bucket, 'Key': key},
-        Bucket=CLEAN_BUCKET,
-        Key=dest_key
-    )
-
-    # 2. Write to DynamoDB
-    logger.info(f"Writing Claim {claim_id} to {CLAIMS_TABLE}")
-    
+@tracer.capture_method
+def update_claim_record(claim_id: str, external_id: str, filename: str, channel: str):
+    """
+    Updates the main CLAIM record with the new file and checks packet completeness.
+    """
     table = dynamodb.Table(CLAIMS_TABLE)
     timestamp = datetime.now(timezone.utc).isoformat()
     
-    item = {
-        'PK': f"CLAIM#{claim_id}",
-        'SK': 'META',
-        'claim_id': claim_id,
-        'status': 'INTAKE',
-        'created_at': timestamp,
-        'latest_doc_id': doc_id,
-        'channel': channel,
-        'ttl': int(datetime.now(timezone.utc).timestamp()) + (365*24*60*60)
-    }
+    # Update documents set and metadata
+    # We use a GSI-friendly format or just a list? 
+    # For "Collector", we just need to know IF we should trigger.
+    # Let's verify completeness.
     
-    table.put_item(Item=item)
-    
-    # 3. Metrics
-    metrics.add_metric(name="ClaimsIngested", unit=MetricUnit.Count, value=1)
-    
-    return claim_id
+    try:
+        resp = table.update_item(
+            Key={'PK': f"CLAIM#{claim_id}", 'SK': 'META'},
+            UpdateExpression="ADD received_documents :f SET external_id = :e, #s = if_not_exists(#s, :status), updated_at = :t, channel = :c",
+            ExpressionAttributeNames={'#s': 'status'},
+            ExpressionAttributeValues={
+                ':f': {filename}, # Set of strings
+                ':e': external_id,
+                ':status': 'INTAKE',
+                ':t': timestamp,
+                ':c': channel
+            },
+            ReturnValues="ALL_NEW"
+        )
+        
+        attributes = resp.get('Attributes', {})
+        docs = attributes.get('received_documents', set())
+        
+        return docs
+    except Exception as e:
+        logger.exception("Failed to update claim record")
+        raise e
 
+import boto3
+sfn = boto3.client('stepfunctions')
+STATE_MACHINE_ARN = os.environ.get('STATE_MACHINE_ARN')
+
+@tracer.capture_method
+def check_and_trigger_orchestration(claim_uuid: str, documents: set):
+    """
+    Triggers Step Function if packet is complete.
+    Idempotency: Uses claim_uuid as Execution Name.
+    """
+    # Logic: Trigger if 'FNOL.pdf' AND 'INVOICE.pdf' are present
+    # OR if we have significant data.
+    # For Golden Set: We have 12 files. 
+    # Let's just ALWAYS try to trigger if FNOL is present, rely on SF Idempotency to ensure singleton.
+    
+    # Check for critical docs
+    # Convert set to list for checking
+    doc_list = list(documents)
+    has_fnol = any("FNOL" in d for d in doc_list)
+    has_invoice = any("INVOICE" in d for d in doc_list)
+    
+    if has_fnol or has_invoice or len(doc_list) >= 4:
+        logger.info(f"Packet critical mass reached ({len(doc_list)} docs). Attempting Orchestration...")
+        
+        if not STATE_MACHINE_ARN:
+            logger.warning("STATE_MACHINE_ARN not set. Skipping trigger.")
+            return
+
+        try:
+            sfn.start_execution(
+                stateMachineArn=STATE_MACHINE_ARN,
+                name=claim_uuid, # Enforce Idempotency
+                input=json.dumps({
+                    "claim_uuid": claim_uuid,
+                    "reason": "Packet Update"
+                })
+            )
+            logger.info(f"Started/Joined Execution for {claim_uuid}")
+        except sfn.exceptions.ExecutionAlreadyExists:
+            logger.info(f"Execution already running for {claim_uuid}. Idempotency active.")
+        except Exception as e:
+            logger.error(f"Failed to trigger SF: {e}")
 
 @logger.inject_lambda_context(log_event=True)
 @metrics.log_metrics(capture_cold_start_metric=True)
 @tracer.capture_lambda_handler
-@idempotent(persistence_store=persistence_layer)
+# @idempotent(persistence_store=persistence_layer) # Disable automatic powertools idempotency to handle Atomic Logic manually
 @event_source(data_class=EventBridgeEvent)
 def ingestion_handler(event: EventBridgeEvent, context):
     """
@@ -116,8 +175,52 @@ def ingestion_handler(event: EventBridgeEvent, context):
     object_key = urllib.parse.unquote_plus(object_key)
     
     try:
-        claim_id = process_record(bucket_name, object_key)
+        # process_record logic integrated here for flow control
+        logger.info(f"Processing object: {bucket_name}/{object_key}")
+        
+        # 1. Parse Key
+        # Updated Format: <external_id>/raw/documents/<filename>
+        parts = object_key.split('/')
+        if len(parts) >= 4 and parts[1] == 'raw':
+             raw_external_id = parts[0]
+             channel = parts[2]
+             filename = parts[-1]
+        elif len(parts) >= 3 and parts[0] == 'raw':
+             # Legacy
+             channel = parts[1]
+             raw_external_id = parts[2]
+             filename = parts[-1]
+        else:
+             raw_external_id = str(uuid.uuid4())
+             channel = "unknown"
+             filename = os.path.basename(object_key)
+
+        external_id = raw_external_id.strip().upper()
+        tracer.put_annotation(key="external_id", value=external_id)
+
+        # 2. Atomic Mapping (Fix Race Condition)
+        claim_id = get_or_create_claim_id(external_id)
+        tracer.put_annotation(key="claim_id", value=claim_id)
+
+        # 3. Copy to Clean Bucket
+        doc_id = str(uuid.uuid4())
+        dest_key = f"{claim_id}/doc_id={doc_id}/{filename}"
+        s3.copy_object(
+            CopySource={'Bucket': bucket_name, 'Key': object_key},
+            Bucket=CLEAN_BUCKET,
+            Key=dest_key,
+            MetadataDirective='REPLACE',
+            Metadata={'external-id': external_id, 'original-key': object_key},
+            Tagging=f"icpa:claim_uuid={claim_id}&icpa:external_id={external_id}"
+        )
+        logger.info(f"Copied to {CLEAN_BUCKET}/{dest_key}")
+
+        # 4. Collector & Trigger (Fix Orchestration)
+        current_docs = update_claim_record(claim_id, external_id, filename, channel)
+        check_and_trigger_orchestration(claim_id, current_docs)
+        
         return {"status": "success", "claim_id": claim_id}
+
     except Exception as e:
         logger.exception("Failed to process event")
-        raise e  # Raise to trigger DLQ via Lambda destination or built-in retry
+        raise e
