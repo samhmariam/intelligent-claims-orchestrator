@@ -44,6 +44,9 @@ def get_or_create_claim_id(external_id: str) -> str:
     
     # 1. Try to create new mapping (Atomic)
     new_claim_id = str(uuid.uuid4())
+    # Removed CLM- special case to enforce UUID-only schema
+    # This prevents split-brain schema issues in Phase 6
+        
     timestamp = datetime.now(timezone.utc).isoformat()
     
     try:
@@ -138,16 +141,22 @@ def check_and_trigger_orchestration(claim_uuid: str, documents: set):
             logger.warning("STATE_MACHINE_ARN not set. Skipping trigger.")
             return
 
+        # "World-Class" Singleton Pattern
+        # Only ONE execution per Claim UUID active at a time to prevent race conditions.
+        # Wait state in SF handles the buffering of multiple files.
+        # This guarantees 13 uploads -> 1 Execution.
+        execution_name = claim_uuid
+            
         try:
             sfn.start_execution(
                 stateMachineArn=STATE_MACHINE_ARN,
-                name=claim_uuid, # Enforce Idempotency
+                name=execution_name, 
                 input=json.dumps({
                     "claim_uuid": claim_uuid,
                     "reason": "Packet Update"
                 })
             )
-            logger.info(f"Started/Joined Execution for {claim_uuid}")
+            logger.info(f"Started Singleton Execution for {claim_uuid}")
         except sfn.exceptions.ExecutionAlreadyExists:
             logger.info(f"Execution already running for {claim_uuid}. Idempotency active.")
         except Exception as e:
@@ -201,6 +210,7 @@ def ingestion_handler(event: EventBridgeEvent, context):
         # 2. Atomic Mapping (Fix Race Condition)
         claim_id = get_or_create_claim_id(external_id)
         tracer.put_annotation(key="claim_id", value=claim_id)
+        logger.info(f"Atomic Mapping: {external_id} → {claim_id}")
 
         # 3. Copy to Clean Bucket
         doc_id = str(uuid.uuid4())

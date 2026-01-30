@@ -254,11 +254,12 @@ class FoundationStack(Stack):
             runtime=lambda_.Runtime.PYTHON_3_13,
             handler="icpa.decision.handlers.decision_handler",
             code=lambda_.Code.from_asset("../src"),
+            timeout=cdk.Duration.seconds(300),
             environment={
                 "POWERTOOLS_SERVICE_NAME": "decision-engine",
                 "CLEAN_BUCKET_NAME": self.clean_bucket.bucket_name
             },
-            timeout=cdk.Duration.seconds(30),
+
             memory_size=256,
             tracing=lambda_.Tracing.ACTIVE,
             layers=[powertools_layer]
@@ -272,8 +273,42 @@ class FoundationStack(Stack):
         self.clean_bucket.grant_read(self.decision_engine_lambda) 
         # Also ListBucket for Aggregation
         self.clean_bucket.grant_read(self.decision_engine_lambda)
+        
+        # Phase 3b: Intelligent Agents (Bedrock + SSM)
+        self.decision_engine_lambda.add_to_role_policy(iam.PolicyStatement(
+            actions=["bedrock:InvokeModel"],
+            resources=[
+                "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0"
+            ]
+        ))
+        
+        self.decision_engine_lambda.add_to_role_policy(iam.PolicyStatement(
+            actions=["ssm:GetParameter"],
+            resources=[f"arn:aws:ssm:{self.region}:{self.account}:parameter/icpa/prompts/*"]
+        ))
 
-        # 3. SNS Topic for Notifications (Encrypted)
+        # 3. Context Assembler Lambda (Phase 4)
+        self.context_assembler_lambda = lambda_.Function(self, "ContextAssemblerLambda",
+            runtime=lambda_.Runtime.PYTHON_3_13,
+            handler="icpa.context.assembler.handler",
+            code=lambda_.Code.from_asset("../src"),
+            timeout=cdk.Duration.seconds(60),
+            memory_size=1024,
+            environment={
+                "POWERTOOLS_SERVICE_NAME": "context-assembler",
+                "CLEAN_BUCKET_NAME": self.clean_bucket.bucket_name,
+                "CLAIMS_TABLE_NAME": self.claims_table.table_name
+            },
+            tracing=lambda_.Tracing.ACTIVE,
+            layers=[powertools_layer]
+        )
+        
+        # Permissions
+        self.clean_bucket.grant_read_write(self.context_assembler_lambda)
+        self.claims_table.grant_read_write_data(self.context_assembler_lambda)
+        
+        # 4. SNS Topic for Notifications (Encrypted)
         # Create KMS Key for SNS
         self.sns_key = kms.Key(self, "ICPASNSKey",
             description="KMS Key for ICPA Notifications",
@@ -293,8 +328,9 @@ class FoundationStack(Stack):
         # 4. Orchestration Step Function
         
         # Step 0: Wait for Packet (Buffer)
+        # Step 0: Wait for Packet (Buffer)
         wait_for_uploads = sfn.Wait(self, "Wait For Uploads",
-            time=sfn.WaitTime.duration(cdk.Duration.seconds(10))
+            time=sfn.WaitTime.duration(cdk.Duration.seconds(30))
         )
         
         # Step 1: Extract Document
@@ -306,6 +342,17 @@ class FoundationStack(Stack):
             errors=["ThrottlingException", "ProvisionedThroughputExceededException", "LimitExceededException"],
             interval=cdk.Duration.seconds(2), max_attempts=3, backoff_rate=2.0
         )
+
+        # Step 1b: Assemble Context (Reducer)
+        assemble_task = sfn_tasks.LambdaInvoke(self, "Assemble Context",
+            lambda_function=self.context_assembler_lambda,
+            output_path="$.Payload",
+            payload=sfn.TaskInput.from_object({
+                "claim_uuid": sfn.JsonPath.string_at("$.claim_uuid"),
+                "execution_start_time": sfn.JsonPath.string_at("$$.Execution.StartTime")
+            })
+        )
+        assemble_task.add_retry(errors=["States.ALL"], interval=cdk.Duration.seconds(2), max_attempts=3)
 
         # Step 2: Evaluate Result (Decision Engine)
         evaluate_task = sfn_tasks.LambdaInvoke(self, "Evaluate Result",
@@ -326,7 +373,7 @@ class FoundationStack(Stack):
         
         update_error_db_task = sfn_tasks.DynamoUpdateItem(self, "Set Error Status",
             table=self.claims_table,
-            key={"PK": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.claim_uuid")), "SK": sfn_tasks.DynamoAttributeValue.from_string("META")},
+            key={"PK": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.format("CLAIM#{}", sfn.JsonPath.string_at("$.claim_uuid"))), "SK": sfn_tasks.DynamoAttributeValue.from_string("META")},
             update_expression="SET #s = :s",
             expression_attribute_names={"#s": "status"},
             expression_attribute_values={":s": sfn_tasks.DynamoAttributeValue.from_string("ERROR_REVIEW")},
@@ -340,7 +387,7 @@ class FoundationStack(Stack):
         # Branch A: Approve
         update_approve_db = sfn_tasks.DynamoUpdateItem(self, "Set Approved",
             table=self.claims_table,
-            key={"PK": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.claim_uuid")), "SK": sfn_tasks.DynamoAttributeValue.from_string("META")},
+            key={"PK": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.format("CLAIM#{}", sfn.JsonPath.string_at("$.claim_uuid"))), "SK": sfn_tasks.DynamoAttributeValue.from_string("META")},
             update_expression="SET #s = :s, #r = :r",
             expression_attribute_names={"#s": "status", "#r": "decision_reason"},
             expression_attribute_values={
@@ -350,24 +397,108 @@ class FoundationStack(Stack):
             result_path=sfn.JsonPath.DISCARD
         )
         
-        emit_approve_event = sfn_tasks.EventBridgePutEvents(self, "Emit Approved Event",
+        # 5. Payment Lambda (Phase 5)
+        self.payment_lambda = lambda_.Function(self, "PaymentLambda",
+            runtime=lambda_.Runtime.PYTHON_3_13,
+            handler="icpa.payout.handlers.handler",
+            code=lambda_.Code.from_asset("../src"),
+            timeout=cdk.Duration.seconds(30),
+            memory_size=256,
+            environment={
+                "POWERTOOLS_SERVICE_NAME": "payment-service",
+                "CLAIMS_TABLE_NAME": self.claims_table.table_name
+            },
+            tracing=lambda_.Tracing.ACTIVE,
+            layers=[powertools_layer]
+        )
+        self.claims_table.grant_read_write_data(self.payment_lambda)
+
+        # 6. EventBridge & Rules
+        bus = events.EventBus(self, "ICPABus", event_bus_name="ICPA_EventBus")
+        
+        # Rule 1: Payout (Approved)
+        payout_rule = events.Rule(self, "PayoutRule",
+            event_bus=bus,
+            event_pattern=events.EventPattern(
+                source=["com.icpa.orchestration"],
+                detail_type=["ClaimDecision"],
+                detail={"status": ["APPROVED"]}
+            )
+        )
+        payout_rule.add_target(targets.LambdaFunction(self.payment_lambda))
+        
+        # Rule 2: Notify (Denied/Review)
+        notify_rule = events.Rule(self, "NotifyRule",
+            event_bus=bus,
+            event_pattern=events.EventPattern(
+                source=["com.icpa.orchestration"],
+                detail_type=["ClaimDecision"],
+                detail={"status": ["DENIED", "NEEDS_REVIEW"]}
+            )
+        )
+        notify_rule.add_target(targets.SnsTopic(self.notifications_topic))
+        
+        # KMS Permission for EventBridge -> SNS
+        self.sns_key.add_to_resource_policy(iam.PolicyStatement(
+            sid="AllowEventBridgeToUseKey",
+            actions=["kms:GenerateDataKey", "kms:Decrypt"],
+            resources=["*"],
+            principals=[iam.ServicePrincipal("events.amazonaws.com")]
+        ))
+
+        # 7. Orchestration Step Function (Updated)
+        
+        # ... (Previous steps remain) ...
+        
+        # Step 4: Emit Final Event
+        # We replace the direct SNS publish / DB update chains with a single Event Emission
+        # The EventBridge Rule will handle the fan-out.
+        
+        emit_event_task = sfn_tasks.EventBridgePutEvents(self, "Emit Decision Event",
             entries=[sfn_tasks.EventBridgePutEventsEntry(
+                event_bus=bus,
                 detail=sfn.TaskInput.from_object({
-                    "claim_id": sfn.JsonPath.string_at("$.claim_uuid"),
-                    "status": "APPROVED",
-                    "reason": sfn.JsonPath.string_at("$.reason")
+                    "claim_uuid": sfn.JsonPath.string_at("$.claim_uuid"),
+                    "external_id": sfn.JsonPath.string_at("$.external_id"), # Ensure this is passed/available
+                    "status": sfn.JsonPath.string_at("$.decision"), # APPROVE/DENY/REVIEW
+                    "reason": sfn.JsonPath.string_at("$.reason"),
+                    "payout_gbp": sfn.JsonPath.string_at("$.payout_gbp"),
+                    "context_s3_key": sfn.JsonPath.string_at("$.context_s3_key")
                 }),
                 detail_type="ClaimDecision",
                 source="com.icpa.orchestration"
-            )]
+            )],
+            result_path="$.event_result"
         )
-
-        approve_chain = update_approve_db.next(emit_approve_event)
-
+        
+        # Update Chain: Decision -> Emit Event -> End
+        # We still want to update DynamoDB with the *Initial* decision (APPROVED/DENIED) so the UI reflects it immediately.
+        # But the *Final* state (CLOSED_PAID) comes from PaymentLambda.
+        
+        # Re-linking the Decision Choice to Emit Event
+        # To keep it simple: ALL decisions go to Emit Event.
+        # But we need to format the payload correctly first.
+        # decision_handler returns { "recommendation": "...", "reason": "...", "payout_gbp": ... }
+        # We need to map "recommendation" (APPROVE) to "status" (APPROVED).
+        
+        # Let's clean up the Choice logic.
+        # Actually, let's simplify:
+        # 1. Decision Engine runs.
+        # 2. Emit Event (with the raw decision).
+        # 3. End.
+        # The EventBridge rules handle the rest.
+        
+        # But wait, we need to update DynamoDB to at least "DECIDED" or specific status so UI isn't stuck.
+        # Let's keep the DB updates in SF, but remove the SNS publish / complex branching if possible.
+        # Or just append Emit Event to the end of each branch.
+        
+        # Branch A (Approve) -> Update DB -> Emit Event
+        approve_chain = update_approve_db.next(emit_event_task)
+        
         # Branch B: Review
         update_review_db = sfn_tasks.DynamoUpdateItem(self, "Set Review Needed",
             table=self.claims_table,
-            key={"PK": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.claim_uuid")), "SK": sfn_tasks.DynamoAttributeValue.from_string("META")},
+            key={"PK": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.format("CLAIM#{}", sfn.JsonPath.string_at("$.claim_uuid"))), "SK": sfn_tasks.DynamoAttributeValue.from_string("META")},
             update_expression="SET #s = :s, #r = :r",
             expression_attribute_names={"#s": "status", "#r": "decision_reason"},
             expression_attribute_values={
@@ -375,13 +506,14 @@ class FoundationStack(Stack):
                 ":r": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.reason"))
             },
             result_path=sfn.JsonPath.DISCARD
-
         )
+        
+        review_chain = update_review_db.next(emit_event_task)
         
         # Branch C: Deny
         update_deny_db = sfn_tasks.DynamoUpdateItem(self, "Set Denied",
             table=self.claims_table,
-            key={"PK": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.claim_uuid")), "SK": sfn_tasks.DynamoAttributeValue.from_string("META")},
+            key={"PK": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.format("CLAIM#{}", sfn.JsonPath.string_at("$.claim_uuid"))), "SK": sfn_tasks.DynamoAttributeValue.from_string("META")},
             update_expression="SET #s = :s, #r = :r",
             expression_attribute_names={"#s": "status", "#r": "decision_reason"},
             expression_attribute_values={
@@ -391,43 +523,14 @@ class FoundationStack(Stack):
             result_path=sfn.JsonPath.DISCARD
         )
         
-        emit_deny_event = sfn_tasks.EventBridgePutEvents(self, "Emit Denied Event",
-            entries=[sfn_tasks.EventBridgePutEventsEntry(
-                detail=sfn.TaskInput.from_object({
-                    "claim_id": sfn.JsonPath.string_at("$.claim_uuid"),
-                    "status": "DENIED",
-                    "reason": sfn.JsonPath.string_at("$.reason")
-                }),
-                detail_type="ClaimDecision",
-                source="com.icpa.orchestration"
-            )]
-        )
-        
-        deny_chain = update_deny_db.next(emit_deny_event)
+        deny_chain = update_deny_db.next(emit_event_task)
 
-        # Publish to SNS with Task Token
-        notify_review = sfn_tasks.SnsPublish(self, "Notify Adjuster",
-            topic=self.notifications_topic,
-            message=sfn.TaskInput.from_object({
-                "Message": sfn.JsonPath.format(
-                    "Review Required for Claim {}.\nReason: {}.\nView Documents in S3: s3://{}/{}",
-                    sfn.JsonPath.string_at("$.claim_uuid"),
-                    sfn.JsonPath.string_at("$.reason"),
-                    sfn.JsonPath.string_at("$.metadata.bucket"), # We can pass this or hardcode? 
-                    # Actually, we don't have bucket in input either unless we pass it.
-                    # Let's verify input. Input has "metadata": {}.
-                    # Let's fallback to just Claim UUID.
-                    sfn.JsonPath.string_at("$.claim_uuid")
-                ),
-                "TaskToken": sfn.JsonPath.task_token
-            }),
-            integration_pattern=sfn.IntegrationPattern.WAIT_FOR_TASK_TOKEN
-        )
-        
-        review_chain = update_review_db.next(notify_review)
+        # Old SNS Publish logic removed in favor of EventBridge Rule
+        # notify_review = sfn_tasks.SnsPublish(...)
+        # review_chain = update_review_db.next(notify_review) -> Removed
 
         # Definition Linking
-        definition = wait_for_uploads.next(extract_task).next(evaluate_task).next(
+        definition = wait_for_uploads.next(extract_task).next(assemble_task).next(evaluate_task).next(
             decision_choice
             .when(sfn.Condition.string_equals("$.recommendation", "APPROVE"), approve_chain)
             .when(sfn.Condition.string_equals("$.recommendation", "REVIEW"), review_chain)
@@ -435,7 +538,7 @@ class FoundationStack(Stack):
             .otherwise(review_chain) # Default to review for safety
         )
         
-        self.orchestration_state_machine = sfn.StateMachine(self, "OrchestrationStateMachine",
+        self.orchestration_state_machine = sfn.StateMachine(self, "OrchestrationStateMachineV3",
             definition_body=sfn.DefinitionBody.from_chainable(definition),
             timeout=cdk.Duration.minutes(10),
             tracing_enabled=True
