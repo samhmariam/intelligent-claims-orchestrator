@@ -34,16 +34,16 @@ def handler(event, context):
     # 1. Idempotency Check
     # Check if already paid
     try:
-        resp = table.get_item(Key={'PK': f"CLAIM#{claim_uuid}", 'SK': 'META'})
+        resp = table.get_item(Key={'PK': f"CLAIM#{claim_uuid}", 'SK': 'META'}, ConsistentRead=True)
         item = resp.get('Item', {})
         current_status = item.get('status')
         
         # Diagnostic: Check if context_bundle_s3_key exists BEFORE update
         context_key = item.get('context_bundle_s3_key')
         if context_key:
-            logger.info(f"✓ Evidence Link Present: {context_key}")
+            logger.info(f"[OK] Evidence Link Present: {context_key}")
         else:
-            logger.warning(f"⚠ Evidence Link Missing: context_bundle_s3_key not found in record before payment")
+            logger.warning(f"[WARNING] Evidence Link Missing: context_bundle_s3_key not found in record before payment")
         
         if current_status == 'CLOSED_PAID':
             logger.info(f"Claim {claim_uuid} is already CLOSED_PAID. Skipping duplicate payout.")
@@ -73,11 +73,9 @@ def handler(event, context):
         
     # 3. Execute Payment (Mock Banking API)
     # In reality, this would call Stripe Connect / BACS API
-    logger.info(f"$$$ INITIATING BACS TRANSFER $$$")
-    logger.info(f"Beneficiary: Policyholder for {external_id}")
-    logger.info(f"Amount: £{amount:.2f}")
-    logger.info(f"Reference: {claim_uuid}")
-    logger.info(f"$$$ TRANSFER COMPLETE $$$")
+    logger.info(f"INITIATING BACS TRANSFER for claim {claim_uuid}: £{amount:.2f} to {external_id}")
+    logger.info(f"Payment Processed: claim_uuid={claim_uuid}, amount=£{amount:.2f}, beneficiary={external_id}")
+    logger.info(f"TRANSFER COMPLETE for claim {claim_uuid}")
     
     # 4. Update Status to CLOSED_PAID (Safe Update)
     # Use update_item to preserve Context Bundle link

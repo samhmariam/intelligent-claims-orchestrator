@@ -1,0 +1,9 @@
+{
+  "ICPA-FoundationStack": {
+    "ExportsOutputRefCleanBucket6216A4385636FCA9": "icpa-clean-data",
+    "ExportsOutputFnGetAttCleanBucket6216A438Arn911041F7": "arn:aws:s3:::icpa-clean-data",
+    "ExportsOutputRefPowertoolsLayer17979D4BF1F19FF3": "arn:aws:lambda:us-east-1:120106008631:layer:PowertoolsLayer17979D4B:2",
+    "ExportsOutputFnGetAttClaimsTableD23EAB22ArnFE81B29B": "arn:aws:dynamodb:us-east-1:120106008631:table/ICPA_Claims",
+    "ExportsOutputRefClaimsTableD23EAB22931A7612": "ICPA_Claims"
+  }
+}

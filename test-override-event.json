@@ -1,0 +1,6 @@
+{
+  "pathParameters": {
+    "external_id": "CLM-000001"
+  },
+  "body": "{\"action\":\"FORCE_APPROVE\",\"manual_reviewer_id\":\"adjuster-001\",\"override_justification\":\"AI missed third-party liability clause in witness statement\",\"payout_gbp_override\":849.52}"
+}

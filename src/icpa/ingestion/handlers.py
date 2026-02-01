@@ -85,18 +85,17 @@ def update_claim_record(claim_id: str, external_id: str, filename: str, channel:
     table = dynamodb.Table(CLAIMS_TABLE)
     timestamp = datetime.now(timezone.utc).isoformat()
     
-    # Update documents set and metadata
-    # We use a GSI-friendly format or just a list? 
-    # For "Collector", we just need to know IF we should trigger.
-    # Let's verify completeness.
+    # Update documents list and metadata
+    # Changed from ADD (set) to list_append (list) for better compatibility
     
     try:
         resp = table.update_item(
             Key={'PK': f"CLAIM#{claim_id}", 'SK': 'META'},
-            UpdateExpression="ADD received_documents :f SET external_id = :e, #s = if_not_exists(#s, :status), updated_at = :t, channel = :c",
+            UpdateExpression="SET received_documents = list_append(if_not_exists(received_documents, :empty_list), :f), external_id = :e, #s = if_not_exists(#s, :status), updated_at = :t, channel = :c",
             ExpressionAttributeNames={'#s': 'status'},
             ExpressionAttributeValues={
-                ':f': {filename}, # Set of strings
+                ':f': [filename],  # List with single filename
+                ':empty_list': [],  # Empty list for initialization
                 ':e': external_id,
                 ':status': 'INTAKE',
                 ':t': timestamp,
@@ -106,7 +105,7 @@ def update_claim_record(claim_id: str, external_id: str, filename: str, channel:
         )
         
         attributes = resp.get('Attributes', {})
-        docs = attributes.get('received_documents', set())
+        docs = set(attributes.get('received_documents', []))  # Convert list to set for compatibility
         
         return docs
     except Exception as e:

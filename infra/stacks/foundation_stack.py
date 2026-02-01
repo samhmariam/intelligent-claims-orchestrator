@@ -134,7 +134,7 @@ class FoundationStack(Stack):
         )
 
         # 2. Powertools Layer (Local Bundle)
-        powertools_layer = lambda_.LayerVersion(self, "PowertoolsLayer",
+        self.powertools_layer = lambda_.LayerVersion(self, "PowertoolsLayer",
             code=lambda_.Code.from_asset("layers/powertools"),
             compatible_runtimes=[lambda_.Runtime.PYTHON_3_13],
             description="Local build of aws-lambda-powertools"
@@ -154,7 +154,7 @@ class FoundationStack(Stack):
             timeout=cdk.Duration.seconds(30),
             memory_size=256,
             tracing=lambda_.Tracing.ACTIVE, # X-Ray Enabled
-            layers=[powertools_layer],
+            layers=[self.powertools_layer],
             dead_letter_queue=self.ingestion_dlq
         )
 
@@ -230,13 +230,14 @@ class FoundationStack(Stack):
             timeout=cdk.Duration.seconds(300),
             memory_size=1024,
             tracing=lambda_.Tracing.ACTIVE,
-            layers=[powertools_layer]
+            layers=[self.powertools_layer]
         )
         
         # Permissions
         self.clean_bucket.grant_read_write(self.doc_processor_lambda)
         self.quarantine_bucket.grant_put(self.doc_processor_lambda)
-        self.claims_table.grant_write_data(self.doc_processor_lambda)
+        # PHASE 1: Changed to grant_read_write_data to allow cache lookups (GetItem)
+        self.claims_table.grant_read_write_data(self.doc_processor_lambda)
         
         self.doc_processor_lambda.add_to_role_policy(iam.PolicyStatement(
             actions=[
@@ -262,7 +263,7 @@ class FoundationStack(Stack):
 
             memory_size=256,
             tracing=lambda_.Tracing.ACTIVE,
-            layers=[powertools_layer]
+            layers=[self.powertools_layer]
         )
         self.decision_engine_lambda.add_to_role_policy(iam.PolicyStatement(
             actions=["s3:ListBucket"], 
@@ -301,7 +302,7 @@ class FoundationStack(Stack):
                 "CLAIMS_TABLE_NAME": self.claims_table.table_name
             },
             tracing=lambda_.Tracing.ACTIVE,
-            layers=[powertools_layer]
+            layers=[self.powertools_layer]
         )
         
         # Permissions
@@ -336,6 +337,9 @@ class FoundationStack(Stack):
         # Step 1: Extract Document
         extract_task = sfn_tasks.LambdaInvoke(self, "Extract Document",
             lambda_function=self.doc_processor_lambda,
+            payload=sfn.TaskInput.from_object({
+                "claim_uuid": sfn.JsonPath.string_at("$.claim_uuid")
+            }),
             output_path="$.Payload",
         )
         extract_task.add_retry(
@@ -388,11 +392,15 @@ class FoundationStack(Stack):
         update_approve_db = sfn_tasks.DynamoUpdateItem(self, "Set Approved",
             table=self.claims_table,
             key={"PK": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.format("CLAIM#{}", sfn.JsonPath.string_at("$.claim_uuid"))), "SK": sfn_tasks.DynamoAttributeValue.from_string("META")},
-            update_expression="SET #s = :s, #r = :r",
-            expression_attribute_names={"#s": "status", "#r": "decision_reason"},
+            update_expression="SET #s = :s, #r = :r, #c = :c, recommendation = :rec, fraud_score = :fs, payout_gbp = :p",
+            expression_attribute_names={"#s": "status", "#r": "decision_reason", "#c": "context_bundle_s3_key"},
             expression_attribute_values={
                 ":s": sfn_tasks.DynamoAttributeValue.from_string("APPROVED"),
-                ":r": sfn_tasks.DynamoAttributeValue.from_string("Auto-Approved by Decision Engine")
+                ":r": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.decision_reason")),
+                ":c": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.context_s3_key")),
+                ":rec": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.recommendation")),
+                ":fs": sfn_tasks.DynamoAttributeValue.number_from_string(sfn.JsonPath.format("{}", sfn.JsonPath.string_at("$.fraud_score"))),
+                ":p": sfn_tasks.DynamoAttributeValue.number_from_string(sfn.JsonPath.format("{}", sfn.JsonPath.string_at("$.payout_gbp")))
             },
             result_path=sfn.JsonPath.DISCARD
         )
@@ -409,7 +417,7 @@ class FoundationStack(Stack):
                 "CLAIMS_TABLE_NAME": self.claims_table.table_name
             },
             tracing=lambda_.Tracing.ACTIVE,
-            layers=[powertools_layer]
+            layers=[self.powertools_layer]
         )
         self.claims_table.grant_read_write_data(self.payment_lambda)
 
@@ -437,6 +445,28 @@ class FoundationStack(Stack):
             )
         )
         notify_rule.add_target(targets.SnsTopic(self.notifications_topic))
+        
+        # Rule 3: Human Override (Phase 6 - HITL Dashboard)
+        # Handles manual overrides from adjusters
+        override_payout_rule = events.Rule(self, "HumanOverridePayoutRule",
+            event_bus=bus,
+            event_pattern=events.EventPattern(
+                source=["com.icpa.human_override"],
+                detail_type=["ManualOverride"],
+                detail={"status": ["APPROVED"]}
+            )
+        )
+        override_payout_rule.add_target(targets.LambdaFunction(self.payment_lambda))
+        
+        override_notify_rule = events.Rule(self, "HumanOverrideNotifyRule",
+            event_bus=bus,
+            event_pattern=events.EventPattern(
+                source=["com.icpa.human_override"],
+                detail_type=["ManualOverride"],
+                detail={"status": ["DENIED"]}
+            )
+        )
+        override_notify_rule.add_target(targets.SnsTopic(self.notifications_topic))
         
         # KMS Permission for EventBridge -> SNS
         self.sns_key.add_to_resource_policy(iam.PolicyStatement(
@@ -499,11 +529,14 @@ class FoundationStack(Stack):
         update_review_db = sfn_tasks.DynamoUpdateItem(self, "Set Review Needed",
             table=self.claims_table,
             key={"PK": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.format("CLAIM#{}", sfn.JsonPath.string_at("$.claim_uuid"))), "SK": sfn_tasks.DynamoAttributeValue.from_string("META")},
-            update_expression="SET #s = :s, #r = :r",
-            expression_attribute_names={"#s": "status", "#r": "decision_reason"},
+            update_expression="SET #s = :s, #r = :r, #c = :c, recommendation = :rec, fraud_score = :fs",
+            expression_attribute_names={"#s": "status", "#r": "decision_reason", "#c": "context_bundle_s3_key"},
             expression_attribute_values={
                 ":s": sfn_tasks.DynamoAttributeValue.from_string("NEEDS_REVIEW"),
-                ":r": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.reason"))
+                ":r": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.decision_reason")),
+                ":c": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.context_s3_key")),
+                ":rec": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.recommendation")),
+                ":fs": sfn_tasks.DynamoAttributeValue.number_from_string(sfn.JsonPath.format("{}", sfn.JsonPath.string_at("$.fraud_score")))
             },
             result_path=sfn.JsonPath.DISCARD
         )
@@ -514,11 +547,14 @@ class FoundationStack(Stack):
         update_deny_db = sfn_tasks.DynamoUpdateItem(self, "Set Denied",
             table=self.claims_table,
             key={"PK": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.format("CLAIM#{}", sfn.JsonPath.string_at("$.claim_uuid"))), "SK": sfn_tasks.DynamoAttributeValue.from_string("META")},
-            update_expression="SET #s = :s, #r = :r",
-            expression_attribute_names={"#s": "status", "#r": "decision_reason"},
+            update_expression="SET #s = :s, #r = :r, #c = :c, recommendation = :rec, fraud_score = :fs",
+            expression_attribute_names={"#s": "status", "#r": "decision_reason", "#c": "context_bundle_s3_key"},
             expression_attribute_values={
                 ":s": sfn_tasks.DynamoAttributeValue.from_string("DENIED"),
-                ":r": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.reason"))
+                ":r": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.decision_reason")),
+                ":c": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.context_s3_key")),
+                ":rec": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.recommendation")),
+                ":fs": sfn_tasks.DynamoAttributeValue.number_from_string(sfn.JsonPath.format("{}", sfn.JsonPath.string_at("$.fraud_score")))
             },
             result_path=sfn.JsonPath.DISCARD
         )

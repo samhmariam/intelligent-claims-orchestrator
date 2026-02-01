@@ -32,45 +32,139 @@ CLAIMS_TABLE = os.environ.get('CLAIMS_TABLE_NAME')
 CHUNK_SIZE = 18000 # ~18KB to stay under 20KB limit
 CHUNK_OVERLAP = 2000
 
+def select_textract_features(bucket: str, key: str, filename: str) -> Tuple[str, List[str]]:
+    """
+    Intelligently selects Textract API and features based on document type.
+    PHASE 1 OPTIMIZATION: Routes photos to DetectDocumentText (98% cost reduction).
+    
+    Returns: (api_method, feature_types)
+    """
+    filename_lower = filename.lower()
+    
+    # CRITICAL: Photos/Images - highest impact optimization
+    # Golden Set: IMG_01.jpg to IMG_08.jpg (bumper damage, VIN plates)
+    # Cost: $0.0015 vs $0.065 (98% savings)
+    if any(ext in filename_lower for ext in ['.jpg', '.jpeg', '.png', '.heic', '.gif']):
+        logger.info(f"Photo detected: {filename} → DetectDocumentText ($0.0015)")
+        metrics.add_metric(
+            name="TextractAPISelection",
+            unit=MetricUnit.Count,
+            value=1
+        )
+        return 'detect_document_text', []
+    
+    # Invoices/Receipts - tables only (no forms)
+    # Cost: $0.015 vs $0.065 (77% savings)
+    if 'invoice' in filename_lower or 'receipt' in filename_lower:
+        logger.info(f"Invoice detected: {filename} → AnalyzeDocument(TABLES)")
+        metrics.add_metric(
+            name="TextractAPISelection",
+            unit=MetricUnit.Count,
+            value=1
+        )
+        return 'analyze_document', ['TABLES']
+    
+    # FNOL forms - forms only (no tables typically)
+    # Cost: $0.050 vs $0.065 (23% savings)
+    if 'fnol' in filename_lower or 'claim_form' in filename_lower:
+        logger.info(f"Form detected: {filename} → AnalyzeDocument(FORMS)")
+        metrics.add_metric(
+            name="TextractAPISelection",
+            unit=MetricUnit.Count,
+            value=1
+        )
+        return 'analyze_document', ['FORMS']
+    
+    # Police reports, adjuster notes - likely complex multi-page PDFs
+    # Keep both features for comprehensive extraction
+    if 'police' in filename_lower or 'adjuster' in filename_lower or 'report' in filename_lower:
+        logger.info(f"Complex document: {filename} → AnalyzeDocument(TABLES+FORMS)")
+        metrics.add_metric(
+            name="TextractAPISelection",
+            unit=MetricUnit.Count,
+            value=1
+        )
+        return 'analyze_document', ['TABLES', 'FORMS']
+    
+    # Plain text documents
+    if any(ext in filename_lower for ext in ['.txt']):
+        logger.info(f"Text file: {filename} → DetectDocumentText")
+        return 'detect_document_text', []
+    
+    # Default: Use both features (conservative)
+    logger.info(f"Default routing: {filename} → AnalyzeDocument(TABLES+FORMS)")
+    metrics.add_metric(
+        name="TextractAPISelection",
+        unit=MetricUnit.Count,
+        value=1
+    )
+    return 'analyze_document', ['TABLES', 'FORMS']
+
 def get_text_from_textract(bucket: str, key: str) -> Tuple[str, Dict, str, float]:
     """
-    Tries AnalyzeDocument, falls back to DetectDocumentText.
+    Extracts text using intelligent API selection.
+    PHASE 1 OPTIMIZATION: Routes to appropriate Textract API based on document type.
+    
     Returns: (FullText, RawResponse, ExtractorType, Confidence)
     """
     logger.info(f"Extracting text from {bucket}/{key}")
     
-    extractor_type = "TEXTRACT_SYNC_ANALYZE_DOC"
+    # Extract filename for routing decision
+    filename = key.split('/')[-1]
+    
+    # PHASE 1: Intelligent feature selection
+    api_method, features = select_textract_features(bucket, key, filename)
+    
+    extractor_type = f"TEXTRACT_SYNC_{api_method.upper()}"
     confidence = 0.0
     raw_response = {}
     full_text = ""
 
     try:
-        # Attempt 1: Analyze Document (Tables/Forms) - Better for structured data
-        response = textract.analyze_document(
-            Document={'S3Object': {'Bucket': bucket, 'Name': key}},
-            FeatureTypes=['TABLES', 'FORMS']
-        )
-        raw_response = response
-        
-        # Aggregate text
-        blocks = response.get('Blocks', [])
-        lines = [b['Text'] for b in blocks if b['BlockType'] == 'LINE']
-        full_text = "\n".join(lines)
-        
-        # Calculate avg confidence of lines
-        if lines:
-            conf_sum = sum([b['Confidence'] for b in blocks if b['BlockType'] == 'LINE'])
-            confidence = conf_sum / len(lines)
-        
-        # Fallback Trigger: Empty text or very low confidence
-        if not full_text.strip() or confidence < 50.0:
-            logger.warning(f"AnalyzeDocument result poor (Conf: {confidence}). Falling back to DetectDocumentText.")
-            raise Exception("Fallback Required")
+        if api_method == 'detect_document_text':
+            # Cheapest option: $0.0015 per page
+            response = textract.detect_document_text(
+                Document={'S3Object': {'Bucket': bucket, 'Name': key}}
+            )
+            extractor_type = "TEXTRACT_SYNC_DETECT_TEXT"
+            raw_response = response
             
+            blocks = response.get('Blocks', [])
+            lines = [b['Text'] for b in blocks if b['BlockType'] == 'LINE']
+            full_text = "\n".join(lines)
+            
+            if lines:
+                conf_sum = sum([b['Confidence'] for b in blocks if b['BlockType'] == 'LINE'])
+                confidence = conf_sum / len(lines)
+                
+        else:  # analyze_document
+            # Structured extraction with selected features
+            response = textract.analyze_document(
+                Document={'S3Object': {'Bucket': bucket, 'Name': key}},
+                FeatureTypes=features
+            )
+            extractor_type = f"TEXTRACT_SYNC_ANALYZE_{'_'.join(features)}"
+            raw_response = response
+            
+            # Aggregate text
+            blocks = response.get('Blocks', [])
+            lines = [b['Text'] for b in blocks if b['BlockType'] == 'LINE']
+            full_text = "\n".join(lines)
+            
+            # Calculate avg confidence of lines
+            if lines:
+                conf_sum = sum([b['Confidence'] for b in blocks if b['BlockType'] == 'LINE'])
+                confidence = conf_sum / len(lines)
+            
+            # Fallback Trigger: Empty text or very low confidence
+            if not full_text.strip() or confidence < 50.0:
+                logger.warning(f"AnalyzeDocument result poor (Conf: {confidence}). Falling back to DetectDocumentText.")
+                raise Exception("Fallback Required")
+                
     except Exception as e:
         logger.info(f"Fallback to DetectDocumentText due to: {str(e)}")
         # Attempt 2: Detect Document Text (Raw OCR)
-        extractor_type = "TEXTRACT_SYNC_DETECT_TEXT"
+        extractor_type = "TEXTRACT_SYNC_DETECT_TEXT_FALLBACK"
         response = textract.detect_document_text(
             Document={'S3Object': {'Bucket': bucket, 'Name': key}}
         )
@@ -83,6 +177,13 @@ def get_text_from_textract(bucket: str, key: str) -> Tuple[str, Dict, str, float
         if lines:
             conf_sum = sum([b['Confidence'] for b in blocks if b['BlockType'] == 'LINE'])
             confidence = conf_sum / len(lines)
+    
+    # PHASE 1: Track cost metrics
+    metrics.add_metric(
+        name="TextractExtraction",
+        unit=MetricUnit.Count,
+        value=1
+    )
             
     return full_text, raw_response, extractor_type, confidence
 
@@ -178,9 +279,101 @@ def redact_phi(text: str) -> str:
         
     return redacted_text
 
+# PHASE 1 OPTIMIZATION: Caching Layer (99% development cost reduction)
+def get_cached_extraction(doc_id: str) -> Dict | None:
+    """
+    Check if extraction already exists in cache.
+    PHASE 1: Uses DOC#<doc_id> pattern for deduplication.
+    
+    Returns cached extraction data or None if not found.
+    """
+    table = dynamodb.Table(CLAIMS_TABLE)
+    
+    try:
+        response = table.get_item(
+            Key={'PK': f'DOC#{doc_id}', 'SK': 'EXTRACT'}
+        )
+        
+        item = response.get('Item')
+        if item and 'extracted_text_s3_uri' in item:
+            # Verify S3 object still exists
+            try:
+                extract_key = item['extracted_text_s3_uri'].replace(f's3://{CLEAN_BUCKET}/', '')
+                s3.head_object(
+                    Bucket=CLEAN_BUCKET,
+                    Key=extract_key
+                )
+                logger.info(f"✅ Cache HIT for {doc_id}")
+                metrics.add_metric(
+                    name="TextractCacheHit",
+                    unit=MetricUnit.Count,
+                    value=1
+                )
+                return item
+            except s3.exceptions.NoSuchKey:
+                logger.warning(f"Cached S3 object missing for {doc_id}. Cache invalidated.")
+                metrics.add_metric(
+                    name="TextractCacheMiss",
+                    unit=MetricUnit.Count,
+                    value=1
+                )
+        
+        logger.info(f"Cache MISS for {doc_id}")
+        metrics.add_metric(
+            name="TextractCacheMiss",
+            unit=MetricUnit.Count,
+            value=1
+        )
+        return None
+    except Exception as e:
+        logger.error(f"Cache lookup failed for {doc_id}: {e}")
+        return None
+
+def cache_extraction_result(doc_id: str, claim_id: str, extraction_data: Dict):
+    """
+    Store extraction result with 30-day TTL.
+    PHASE 1: Allows iteration on downstream logic without re-running OCR.
+    
+    TTL: 30 days for development (allows extensive iteration on Decision Engine/Context Assembler)
+    """
+    table = dynamodb.Table(CLAIMS_TABLE)
+    timestamp = datetime.now(timezone.utc)
+    
+    # TTL: 30 days (2,592,000 seconds)
+    # This allows developers to iterate on Decision Engine and Context Assembler
+    # without paying for OCR on the same Golden Set documents repeatedly
+    ttl_timestamp = int(timestamp.timestamp()) + (30 * 24 * 60 * 60)
+    
+    try:
+        table.put_item(
+            Item={
+                'PK': f'DOC#{doc_id}',
+                'SK': 'EXTRACT',
+                'claim_id': claim_id,
+                'extracted_text_s3_uri': extraction_data['s3_uri'],
+                'extractor_type': extraction_data['extractor'],
+                'confidence': str(extraction_data['confidence']),
+                'cached_at': timestamp.isoformat(),
+                'ttl': ttl_timestamp  # DynamoDB will auto-delete after 30 days
+            }
+        )
+        logger.info(f"Cached extraction for {doc_id} (TTL: 30 days)")
+        metrics.add_metric(
+            name="TextractCacheSave",
+            unit=MetricUnit.Count,
+            value=1
+        )
+    except Exception as e:
+        logger.error(f"Failed to cache extraction for {doc_id}: {e}")
+        # Non-fatal: continue processing even if cache save fails
+
+
 @tracer.capture_method
 def process_document(bucket: str, key: str) -> Dict:
-    """Core orchestration for a single document."""
+    """
+    Core orchestration for a single document.
+    PHASE 1: Integrated caching layer for 99% development cost reduction.
+    """
     logger.info(f"Processing {bucket}/{key}")
     
     # Parse Path: <claim_id>/doc_id=<doc_id>/<filename>
@@ -198,6 +391,29 @@ def process_document(bucket: str, key: str) -> Dict:
         cid = parts[0] if parts else "UNKNOWN"
         return {"status": "skipped", "debug_key": key, "debug_parts": parts, "claim_uuid": cid}
 
+    # PHASE 1: Check cache first
+    cached = get_cached_extraction(doc_id)
+    if cached:
+        logger.info(f"Using cached extraction for {doc_id} (Textract cost saved!)")
+        # Return cached result in expected format
+        extract_key = cached['extracted_text_s3_uri'].replace(f's3://{CLEAN_BUCKET}/', '')
+        return {
+            "claim_uuid": claim_id,
+            "doc_id": doc_id,
+            "status": "EXTRACTED",
+            "s3_location": {
+                "bucket": CLEAN_BUCKET,
+                "key": extract_key
+            },
+            "metadata": {
+                "confidence": float(cached.get('confidence', 0.0)),
+                "extractor": cached.get('extractor_type', 'CACHED'),
+                "external_id": "CACHED",
+                "cached": True,
+                "cached_at": cached.get('cached_at')
+            }
+        }
+
     # 1. Get S3 Metadata (Context Propagation)
     try:
         head = s3.head_object(Bucket=bucket, Key=key)
@@ -208,13 +424,13 @@ def process_document(bucket: str, key: str) -> Dict:
         external_id = "UNKNOWN"
 
     
-    # 2. Extract
+    # 2. Extract (PHASE 1: Intelligent routing applied here)
     text, raw_json, extractor, confidence = get_text_from_textract(bucket, key)
     
-    # 2. Redact
+    # 3. Redact
     redacted_text = redact_phi(text)
     
-    # 3. Persist
+    # 4. Persist
     # A. Raw JSON to Quarantine (Audit)
     audit_key = f"phi-audit/{claim_id}/{doc_id}.json"
     s3.put_object(
@@ -232,7 +448,14 @@ def process_document(bucket: str, key: str) -> Dict:
         Metadata={'external-id': external_id}
     )
     
-    # 4. Update Database
+    # PHASE 1: Cache the extraction result
+    cache_extraction_result(doc_id, claim_id, {
+        's3_uri': f's3://{CLEAN_BUCKET}/{extract_key}',
+        'extractor': extractor,
+        'confidence': confidence
+    })
+    
+    # 5. Update Database
     table = dynamodb.Table(CLAIMS_TABLE)
     timestamp = datetime.now(timezone.utc).isoformat()
     
