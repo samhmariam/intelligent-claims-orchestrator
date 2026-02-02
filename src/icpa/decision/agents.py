@@ -38,7 +38,7 @@ class BedrockAgent:
         try:
             # 1. Extract Thinking (Optional but good for audit)
             thinking_match = re.search(r"<thinking>(.*?)</thinking>", response_body, re.DOTALL)
-            thinking = thinking_match.group(1).strip() if thinking_match else "No thinking block found."
+            thinking = thinking_match.group(1).strip() if thinking_match else ""
 
             # 2. Extract JSON
             json_match = re.search(r"<json>(.*?)</json>", response_body, re.DOTALL)
@@ -52,7 +52,9 @@ class BedrockAgent:
             json_str = json_match.group(1).strip()
             data = json.loads(json_str)
             
-            # Inject thinking into result for audit
+            # Inject rationale into result for audit (prefer thinking, else decision reason)
+            if not thinking:
+                thinking = data.get("reason") or data.get("decision_reason") or "No rationale provided."
             data['_rationale'] = thinking
             return data
 

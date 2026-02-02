@@ -78,6 +78,9 @@ def decision_handler(event, context):
         logger.exception("Failed to fetch context bundle")
         return {"status": "error", "reason": f"Context Fetch Failed: {str(e)}"}
 
+    # Ensure external_id is available for downstream consumers
+    ext_id = aggregated_metadata.get('external_id') or event.get('external_id') or "UNKNOWN"
+
     # 2. Prepare Context
     context_text = smart_truncate(docs_data)
     context_data = {
@@ -119,8 +122,12 @@ def decision_handler(event, context):
                 "status": "success",
                 "claim_uuid": claim_id,
                 "recommendation": rec if rec else "REVIEW",
+                "decision": rec if rec else "REVIEW",
                 "reason": f"Fraud Check: {fraud_result.get('reason', 'High Risk Detected')}",
                 "decision_reason": fraud_result.get('_rationale', "Fraud Logic"),
+                "fraud_score": fraud_result.get('assessment', {}).get('confidence_score', 0.0),
+                "payout_gbp": 0.0,
+                "external_id": ext_id,
                 "metadata": aggregated_metadata
              }
     
@@ -149,9 +156,6 @@ def decision_handler(event, context):
         except (ValueError, TypeError):
             logger.warning(f"Could not parse payout amount from {amount}")
             payout_gbp = 0.0
-
-    # Ensure external_id is available at top level for SF
-    ext_id = aggregated_metadata.get('external_id') or event.get('external_id') or "UNKNOWN"
 
     return {
         "status": "success",

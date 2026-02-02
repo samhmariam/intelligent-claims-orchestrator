@@ -89,7 +89,8 @@ class FoundationStack(Stack):
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             time_to_live_attribute="ttl",
             removal_policy=RemovalPolicy.DESTROY, 
-            point_in_time_recovery=True # Recommended for prod, good for dev too
+            point_in_time_recovery=True, # Recommended for prod, good for dev too
+            stream=dynamodb.StreamViewType.NEW_AND_OLD_IMAGES
         )
 
         # GSI: ExternalIdIndex (Context Propagation)
@@ -350,7 +351,8 @@ class FoundationStack(Stack):
         # Step 1b: Assemble Context (Reducer)
         assemble_task = sfn_tasks.LambdaInvoke(self, "Assemble Context",
             lambda_function=self.context_assembler_lambda,
-            output_path="$.Payload",
+            result_path="$.assembler_output",
+            payload_response_only=True,
             payload=sfn.TaskInput.from_object({
                 "claim_uuid": sfn.JsonPath.string_at("$.claim_uuid"),
                 "execution_start_time": sfn.JsonPath.string_at("$$.Execution.StartTime")
@@ -361,7 +363,8 @@ class FoundationStack(Stack):
         # Step 2: Evaluate Result (Decision Engine)
         evaluate_task = sfn_tasks.LambdaInvoke(self, "Evaluate Result",
             lambda_function=self.decision_engine_lambda,
-            output_path="$.Payload",
+            result_path="$.decision",
+            payload_response_only=True
         )
         
         # Error Handling: Catch ALL -> Handle Failure
@@ -396,11 +399,11 @@ class FoundationStack(Stack):
             expression_attribute_names={"#s": "status", "#r": "decision_reason", "#c": "context_bundle_s3_key"},
             expression_attribute_values={
                 ":s": sfn_tasks.DynamoAttributeValue.from_string("APPROVED"),
-                ":r": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.decision_reason")),
-                ":c": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.context_s3_key")),
-                ":rec": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.recommendation")),
-                ":fs": sfn_tasks.DynamoAttributeValue.number_from_string(sfn.JsonPath.format("{}", sfn.JsonPath.string_at("$.fraud_score"))),
-                ":p": sfn_tasks.DynamoAttributeValue.number_from_string(sfn.JsonPath.format("{}", sfn.JsonPath.string_at("$.payout_gbp")))
+                ":r": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.decision.decision_reason")),
+                ":c": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.assembler_output.bundle_s3_key")),
+                ":rec": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.decision.recommendation")),
+                ":fs": sfn_tasks.DynamoAttributeValue.number_from_string(sfn.JsonPath.format("{}", sfn.JsonPath.string_at("$.decision.fraud_score"))),
+                ":p": sfn_tasks.DynamoAttributeValue.number_from_string(sfn.JsonPath.format("{}", sfn.JsonPath.string_at("$.decision.payout_gbp")))
             },
             result_path=sfn.JsonPath.DISCARD
         )
@@ -489,11 +492,11 @@ class FoundationStack(Stack):
                 event_bus=bus,
                 detail=sfn.TaskInput.from_object({
                     "claim_uuid": sfn.JsonPath.string_at("$.claim_uuid"),
-                    "external_id": sfn.JsonPath.string_at("$.external_id"), # Ensure this is passed/available
-                    "status": sfn.JsonPath.string_at("$.decision"), # APPROVE/DENY/REVIEW
-                    "reason": sfn.JsonPath.string_at("$.reason"),
-                    "payout_gbp": sfn.JsonPath.string_at("$.payout_gbp"),
-                    "context_s3_key": sfn.JsonPath.string_at("$.context_s3_key")
+                    "external_id": sfn.JsonPath.string_at("$.decision.external_id"), # Ensure this is passed/available
+                    "status": sfn.JsonPath.string_at("$.decision.decision"), # APPROVE/DENY/REVIEW
+                    "reason": sfn.JsonPath.string_at("$.decision.reason"),
+                    "payout_gbp": sfn.JsonPath.string_at("$.decision.payout_gbp"),
+                    "context_bundle_s3_key": sfn.JsonPath.string_at("$.assembler_output.bundle_s3_key")
                 }),
                 detail_type="ClaimDecision",
                 source="com.icpa.orchestration"
@@ -533,10 +536,10 @@ class FoundationStack(Stack):
             expression_attribute_names={"#s": "status", "#r": "decision_reason", "#c": "context_bundle_s3_key"},
             expression_attribute_values={
                 ":s": sfn_tasks.DynamoAttributeValue.from_string("NEEDS_REVIEW"),
-                ":r": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.decision_reason")),
-                ":c": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.context_s3_key")),
-                ":rec": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.recommendation")),
-                ":fs": sfn_tasks.DynamoAttributeValue.number_from_string(sfn.JsonPath.format("{}", sfn.JsonPath.string_at("$.fraud_score")))
+                ":r": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.decision.decision_reason")),
+                ":c": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.assembler_output.bundle_s3_key")),
+                ":rec": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.decision.recommendation")),
+                ":fs": sfn_tasks.DynamoAttributeValue.number_from_string(sfn.JsonPath.format("{}", sfn.JsonPath.string_at("$.decision.fraud_score")))
             },
             result_path=sfn.JsonPath.DISCARD
         )
@@ -551,10 +554,10 @@ class FoundationStack(Stack):
             expression_attribute_names={"#s": "status", "#r": "decision_reason", "#c": "context_bundle_s3_key"},
             expression_attribute_values={
                 ":s": sfn_tasks.DynamoAttributeValue.from_string("DENIED"),
-                ":r": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.decision_reason")),
-                ":c": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.context_s3_key")),
-                ":rec": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.recommendation")),
-                ":fs": sfn_tasks.DynamoAttributeValue.number_from_string(sfn.JsonPath.format("{}", sfn.JsonPath.string_at("$.fraud_score")))
+                ":r": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.decision.decision_reason")),
+                ":c": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.assembler_output.bundle_s3_key")),
+                ":rec": sfn_tasks.DynamoAttributeValue.from_string(sfn.JsonPath.string_at("$.decision.recommendation")),
+                ":fs": sfn_tasks.DynamoAttributeValue.number_from_string(sfn.JsonPath.format("{}", sfn.JsonPath.string_at("$.decision.fraud_score")))
             },
             result_path=sfn.JsonPath.DISCARD
         )
@@ -568,9 +571,9 @@ class FoundationStack(Stack):
         # Definition Linking
         definition = wait_for_uploads.next(extract_task).next(assemble_task).next(evaluate_task).next(
             decision_choice
-            .when(sfn.Condition.string_equals("$.recommendation", "APPROVE"), approve_chain)
-            .when(sfn.Condition.string_equals("$.recommendation", "REVIEW"), review_chain)
-            .when(sfn.Condition.string_equals("$.recommendation", "DENY"), deny_chain)
+            .when(sfn.Condition.string_equals("$.decision.recommendation", "APPROVE"), approve_chain)
+            .when(sfn.Condition.string_equals("$.decision.recommendation", "REVIEW"), review_chain)
+            .when(sfn.Condition.string_equals("$.decision.recommendation", "DENY"), deny_chain)
             .otherwise(review_chain) # Default to review for safety
         )
         

@@ -203,8 +203,8 @@ class ContextAssembler:
              )
              logger.info("Updated DynamoDB with bundle link.")
         except Exception as e:
-            logger.error(f"Failed to link bundle in DynamoDB: {e}")
-            # Non-fatal? The bundle exists in S3. But good to know.
+            logger.error(f"CRITICAL: Failed to link bundle in DynamoDB: {e}")
+            raise
         
         return optimized_bundle
 
