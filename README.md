@@ -8,13 +8,13 @@
 
 ---
 
-## 🚀 Quick Start (5 Minutes)
+## Quick Start (5 Minutes)
 
 ### Prerequisites
 - **AWS Account** with Bedrock access enabled in `us-east-1`
-- **Python 3.11+** (check with `python --version`)
+- **Python 3.13** (see `.python-version`)
 - **AWS CLI v2** configured with credentials
-- **Terraform v1.5+** or **AWS CDK v2** (for infrastructure)
+- **AWS CDK v2** (for infrastructure)
 
 ### Local Setup
 ```bash
@@ -31,13 +31,13 @@ aws configure
 # Run validation checks
 python .agents/validate-state.py
 
-# Test with sample claim
-python main.py --claim-file tests/fixtures/sample-claim.json
+# Sample claim data
+# test-data/claims/CLM-000001/claim.json
 ```
 
 ---
 
-## 📐 Architecture Overview
+## Architecture Overview
 
 ### System Design
 ICPA implements a **serverless, event-driven architecture** with multi-agent orchestration:
@@ -84,7 +84,7 @@ ICPA implements a **serverless, event-driven architecture** with multi-agent orc
 
 ---
 
-## 🤖 Development Workflow (SDLC Agents)
+## Development Workflow (SDLC Agents)
 
 This repository uses **seven AI-native agents** aligned to SDLC phases:
 
@@ -112,7 +112,7 @@ python .agents/validate-state.py --phase DESIGN --check-dependencies
 
 ---
 
-## 🔐 Security & Compliance
+## Security & Compliance
 
 ### Compliance Frameworks
 - **HIPAA:** PHI detection via Comprehend Medical with >0.90 confidence threshold
@@ -136,7 +136,7 @@ python .agents/validate-state.py --phase DESIGN --check-dependencies
 
 ---
 
-## 💰 Cost Model
+## Cost Model
 
 ### Target: **$0.45 per Claim** (Non-HITL Path, maximum)
 
@@ -160,7 +160,7 @@ python .agents/validate-state.py --phase DESIGN --check-dependencies
 
 ---
 
-## 📊 Observability
+## Observability
 
 ### Key Metrics (SLIs)
 - **Latency:** P95 end-to-end < 120s (non-HITL)
@@ -191,11 +191,11 @@ python .agents/validate-state.py --phase DESIGN --check-dependencies
 
 ---
 
-## 🚢 Deployment (AWS-Only)
+## Deployment (AWS-Only)
 
 ### Infrastructure
-- Apply storage lifecycle and TTL policies with [infra/cdk/storage-lifecycle.yaml](infra/cdk/storage-lifecycle.yaml).
-- Apply ADOT defaults with [infra/cdk/lambda-observability.yaml](infra/cdk/lambda-observability.yaml).
+- Deploy stacks with AWS CDK from `infra/`.
+- Example: `cd infra && cdk deploy ICPA-FoundationStack`
 
 ### Prompt Governance
 - Seed prompts to SSM using [scripts/seed_prompts.py](scripts/seed_prompts.py).
@@ -206,7 +206,83 @@ python .agents/validate-state.py --phase DESIGN --check-dependencies
 
 ---
 
-## 📞 Contact & Escalation
+## Analytics & Reporting (Phase 7)
+
+### Data Lake Architecture
+ICPA implements a **serverless, event-driven data lake** for real-time operational insights:
+
+```
+DynamoDB Claims Table
+    ↓ (DynamoDB Streams)
+Lambda Stream Processor
+    ↓ (Transform & Batch)
+Kinesis Data Firehose
+    ↓ (Parquet Conversion)
+S3 Analytics Lake
+    ↓ (Scheduled Crawl)
+AWS Glue Crawler
+    ↓ (SQL Schema)
+Amazon Athena
+    ↓ (Visualizations)
+Amazon QuickSight
+```
+
+### Three Dashboard Views
+
+#### 1. Financial Operations (CFO View)
+- **Total Textract Savings**: Track ~85% cost reduction from using `detect_text` vs. `analyze_document`
+- **Total Payout Released**: Monitor GBP released via BACS vs. budget
+- **Average Cost per Claim**: Target < £0.50 per claim
+- **Monthly Payout Trend**: Visualize claim volume and payout patterns
+
+#### 2. Model Performance (Data Science View)
+- **AI Agreement Rate**: Track AI vs. human adjuster agreement (target ≥ 90%)
+- **Override Rate**: Monitor frequency of human overrides
+- **Fraud Score Heatmap**: Identify high-risk patterns by region/vehicle type
+- **Override Justification Analysis**: Sentiment analysis to improve prompts
+
+#### 3. Operational Efficiency (Manager View)
+- **End-to-End Processing Time**: Monitor P95 latency (target < 5 minutes)
+- **Claims Throughput**: Track claims processed per hour/day
+- **Bottleneck Detection**: Identify slowest workflow stages
+- **Hourly Volume Heatmap**: Capacity planning for peak hours
+
+### Model Drift Feedback Loop
+Weekly "Hard Case" reviews automatically identify disagreements between AI and human adjusters:
+1. Query claims with `adjuster_override = true`
+2. Extract common patterns from `override_justification`
+3. Update Adjudication Agent prompts with new edge cases
+4. A/B test improvements and measure agreement rate increase
+
+### Cost: < $5/month (excluding QuickSight)
+- **S3 Storage**: $0.001/month (with lifecycle policies)
+- **Athena Queries**: $0.015/month (Parquet reduces scans by 80-95%)
+- **Glue Crawler**: $0.18/month (runs every 6 hours)
+- **Firehose**: $0.002/month (batched delivery)
+
+📊 **[QuickSight Setup Guide](docs/quicksight-dashboards.md)**  
+📖 **[Phase 7 Implementation](docs/phase-7-implementation.md)**  
+🏛️ **[ADR-002: Analytics Data Lake](docs/adr/adr-002-analytics-data-lake.md)**
+
+### Deployment
+```bash
+# Deploy Analytics Stack
+cd infra
+cdk deploy ICPA-AnalyticsStack
+
+# Verify deployment
+uv run scripts/verify_phase_7.py
+
+# Run Glue Crawler (after processing some claims)
+uv run scripts/verify_phase_7.py --run-crawler
+
+# Query data with Athena
+uv run scripts/verify_phase_7.py --query-athena
+```
+
+---
+
+## Contact & Escalation
 
 ### Development Team
 - **Product Owner:** [Name] (@handle)
@@ -227,28 +303,30 @@ python .agents/validate-state.py --phase DESIGN --check-dependencies
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ### Test Pyramid
 - **Unit Tests (70%):** pytest for each Lambda function
 - **Integration Tests (20%):** Step Functions with mocked Bedrock
 - **E2E Tests (10%):** Full claim lifecycle on staging
 
-### Golden Set Evaluation
+### Verification Scripts
 ```bash
-# Run evaluation against golden set v1.0
-python scripts/evaluate.py --golden-set s3://evaluation-bucket/golden-set/v1.0/cases.jsonl
+# Foundation checks
+uv run scripts/verify_phase_0.py
 
-# Expected output:
-# DecisionAccuracy: 92.3% (92/100 cases)
-# AvgPayout Error: 3.2% (within +/- 5% tolerance)
+# End-to-end HITL workflow (requires API URL)
+python scripts/verify_phase_6.py --claim-id CLM-000001 --api-url https://<api-id>.execute-api.us-east-1.amazonaws.com/prod
+
+# Analytics pipeline
+uv run scripts/verify_phase_7.py
 ```
 
 📋 **[Testing Strategy](docs/prd.md#testing-strategy)**
 
 ---
 
-## 🚢 Deployment
+## Deployment
 
 ### Environments
 - **Dev:** Auto-deploy on merge to `main` (us-east-1)
@@ -268,7 +346,7 @@ Before any production deploy:
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 ### Key Documents
 - **[PRD](docs/prd.md)** - Complete product requirements with canonical schemas
@@ -279,11 +357,11 @@ Before any production deploy:
 
 ### Code Examples
 - **[Snippets](docs/snippets/)** - Reference implementations for each AWS service
-- **[Test Fixtures](tests/fixtures/)** - Sample claims and expected outputs
+- **[Test Data](test-data/)** - Sample claims and expected outputs
 
 ---
 
-## 🔄 Disaster Recovery
+## Disaster Recovery
 
 ### Backup Strategy
 - **S3 Versioning:** Enabled on clean/quarantine buckets
@@ -299,13 +377,13 @@ Quarterly disaster recovery drills documented in `docs/incidents/dr-drill-YYYY-M
 
 ---
 
-## 📝 License
+## License
 
 [Internal Use Only - Proprietary]
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 Built with:
 - **AWS Bedrock** (Claude 3 Sonnet)
@@ -315,6 +393,6 @@ Built with:
 
 ---
 
-**Last Updated:** January 19, 2026  
+**Last Updated:** February 2, 2026  
 **Version:** 1.0.0  
 **Maintained by:** ICPA Engineering Team

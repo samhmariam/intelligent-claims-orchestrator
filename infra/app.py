@@ -3,6 +3,7 @@ import os
 import aws_cdk as cdk
 from stacks.foundation_stack import FoundationStack
 from stacks.api_stack import ApiStack
+from stacks.analytics_stack import AnalyticsStack
 
 app = cdk.App()
 
@@ -17,6 +18,12 @@ foundation_stack = FoundationStack(app, "ICPA-FoundationStack",
 
 # Phase 6: HITL Dashboard API Stack
 api_stack = ApiStack(app, "ICPA-ApiStack",
+    foundation_stack=foundation_stack,
+    # env=cdk.Environment(account=os.getenv('CDK_DEFAULT_ACCOUNT'), region=os.getenv('CDK_DEFAULT_REGION')),
+)
+
+# Phase 7: Analytics & Reporting Stack
+analytics_stack = AnalyticsStack(app, "ICPA-AnalyticsStack",
     foundation_stack=foundation_stack,
     # env=cdk.Environment(account=os.getenv('CDK_DEFAULT_ACCOUNT'), region=os.getenv('CDK_DEFAULT_REGION')),
 )
